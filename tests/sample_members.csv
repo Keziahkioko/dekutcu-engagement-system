@@ -1,0 +1,151 @@
+member_id,name,gender,year_of_study,area
+1,Brian Kiptoo,M,2,Nyeri View
+2,Kevin Wafula,M,1,Nyeri Town
+3,Brian Otieno,M,2,Nyeri View
+4,Victor Wanjiru,M,4,Nyeri View
+5,Diana Kiptoo,F,1,Internal Hostels
+6,Purity Kiptoo,F,2,Nyeri View
+7,Mercy Otieno,F,4,Bomas
+8,Purity Chebet,F,3,Bomas
+9,Sharon Otieno,F,4,Bomas
+10,Diana Njoroge,F,2,Bomas
+11,James Kiptoo,M,1,Nyeri View
+12,Dennis Kiptoo,M,4,Embassy
+13,John Njoroge,M,2,Nyeri View
+14,Samuel Kamau,M,2,Internal Hostels
+15,Ann Kiptoo,F,2,Nyaribo
+16,James Mwangi,M,3,King'ong'o
+17,Mercy Wanjiru,F,3,Internal Hostels
+18,Ann Muriuki,F,2,Nyeri View
+19,James Wafula,M,3,Nyeri Town
+20,Purity Wanjiru,F,2,Kahawa
+21,Mercy Mwangi,F,1,Internal Hostels
+22,Dennis Chebet,M,1,King'ong'o
+23,Diana Muriuki,F,3,Bomas
+24,Victor Kiptoo,M,3,Bomas
+25,Ann Kamau,F,4,Bomas
+26,Sharon Kamau,F,1,Catholic Hostels
+27,David Njoroge,M,2,Bomas
+28,Winnie Mwangi,F,1,Embassy
+29,Joy Mwangi,F,2,Bomas
+30,Collins Otieno,M,2,Internal Hostels
+31,Sharon Kamau,F,3,Nyeri Town
+32,Victor Wanjiru,M,3,King'ong'o
+33,Winnie Wafula,F,4,Internal Hostels
+34,James Otieno,M,3,Bomas
+35,Samuel Wanjiru,M,1,Bomas
+36,James Otieno,M,1,Nyaribo
+37,Victor Wanjiru,M,3,Gate A
+38,Victor Kamau,M,4,Nyeri View
+39,Ann Wanjiru,F,1,Bomas
+40,Purity Achieng,F,4,Gate A
+41,Kevin Mwangi,M,4,Nyaribo
+42,James Wanjiru,M,2,Gate A
+43,Dennis Kamau,M,3,Gate A
+44,Kevin Muriuki,M,1,Bomas
+45,Kevin Wanjiru,M,2,Nyeri Town
+46,Winnie Wanjiru,F,4,Bomas
+47,Dennis Mwangi,M,4,Nyeri View
+48,Esther Achieng,F,4,Internal Hostels
+49,Peter Wanjiru,M,1,Bomas
+50,Faith Mwangi,F,4,Kahawa
+51,Brian Wafula,M,1,Internal Hostels
+52,Samuel Otieno,M,2,King'ong'o
+53,Samuel Wanjiru,M,1,Bomas
+54,Diana Chebet,F,3,Nyeri View
+55,John Wanjiru,M,3,King'ong'o
+56,Peter Muriuki,M,3,Bomas
+57,Collins Chebet,M,1,Bomas
+58,Victor Kiptoo,M,2,Nyaribo
+59,James Njoroge,M,3,Internal Hostels
+60,Sharon Kiptoo,F,1,Catholic Hostels
+61,David Kiptoo,M,1,Bomas
+62,Peter Kiptoo,M,2,Nyaribo
+63,Peter Wafula,M,4,Nyeri View
+64,Kevin Achieng,M,3,Bomas
+65,John Kamau,M,3,Internal Hostels
+66,Sharon Achieng,F,1,Bomas
+67,David Wafula,M,1,Embassy
+68,Dennis Kamau,M,1,Catholic Hostels
+69,Faith Njoroge,F,2,Nyeri View
+70,John Wafula,M,4,Internal Hostels
+71,David Kamau,M,4,Bomas
+72,John Achieng,M,2,Nyeri View
+73,Kevin Achieng,M,1,Gate A
+74,James Muriuki,M,3,Catholic Hostels
+75,James Mwangi,M,2,King'ong'o
+76,Esther Otieno,F,3,Nyaribo
+77,Sharon Njoroge,F,1,Bomas
+78,Grace Chebet,F,3,Bomas
+79,Samuel Achieng,M,3,Catholic Hostels
+80,Diana Wafula,F,1,King'ong'o
+81,Peter Mwangi,M,4,Bomas
+82,John Achieng,M,1,Nyaribo
+83,Mercy Kiptoo,F,3,Nyeri Town
+84,Ann Kiptoo,F,2,Internal Hostels
+85,Ann Kamau,F,3,King'ong'o
+86,Peter Kiptoo,M,2,Nyeri Town
+87,Winnie Muriuki,F,4,Internal Hostels
+88,Grace Otieno,F,3,Kahawa
+89,Mercy Wanjiru,F,3,Nyeri View
+90,David Mwangi,M,1,Nyeri View
+91,Diana Otieno,F,4,Nyeri Town
+92,Dennis Muriuki,M,4,Nyeri View
+93,Brian Otieno,M,4,Nyeri View
+94,Victor Muriuki,M,1,Nyeri View
+95,Collins Kamau,M,4,Catholic Hostels
+96,Diana Wafula,F,4,Gate A
+97,Collins Muriuki,M,3,Nyeri View
+98,Sharon Muriuki,F,2,Catholic Hostels
+99,Mercy Kiptoo,F,2,Nyeri View
+100,Purity Wafula,F,1,Internal Hostels
+101,James Achieng,M,2,Internal Hostels
+102,Dennis Achieng,M,3,Gate A
+103,Faith Wanjiru,F,4,King'ong'o
+104,Samuel Achieng,M,4,Bomas
+105,Esther Achieng,F,4,Nyeri View
+106,Joy Kiptoo,F,4,Gate A
+107,Dennis Njoroge,M,4,Internal Hostels
+108,Grace Chebet,F,1,King'ong'o
+109,Kevin Achieng,M,2,Gate A
+110,Brian Kiptoo,M,4,Nyaribo
+111,Collins Njoroge,M,3,King'ong'o
+112,Ann Kiptoo,F,1,Gate A
+113,Victor Mwangi,M,3,Nyeri View
+114,Brian Mwangi,M,2,Internal Hostels
+115,Samuel Kamau,M,2,Internal Hostels
+116,Mercy Chebet,F,2,Gate A
+117,Purity Kamau,F,1,Internal Hostels
+118,Mercy Chebet,F,1,Catholic Hostels
+119,Ann Wanjiru,F,1,Nyeri View
+120,Peter Chebet,M,1,Bomas
+121,Sharon Achieng,F,3,Bomas
+122,Faith Achieng,F,4,Bomas
+123,Purity Muriuki,F,2,Nyeri Town
+124,Victor Kiptoo,M,4,Gate A
+125,Diana Kiptoo,F,3,Nyeri View
+126,Peter Muriuki,M,2,Gate A
+127,Purity Mwangi,F,4,Nyaribo
+128,Collins Wanjiru,M,3,Nyeri View
+129,Esther Chebet,F,3,Bomas
+130,Kevin Wanjiru,M,4,Gate A
+131,Collins Muriuki,M,4,Bomas
+132,Peter Wanjiru,M,4,Nyeri View
+133,Diana Njoroge,F,4,Nyaribo
+134,Sharon Njoroge,F,3,Gate A
+135,Esther Kiptoo,F,2,Internal Hostels
+136,John Otieno,M,2,Internal Hostels
+137,Collins Kiptoo,M,3,Bomas
+138,Peter Wanjiru,M,3,Internal Hostels
+139,Faith Wafula,F,2,Catholic Hostels
+140,Brian Wafula,M,3,Internal Hostels
+141,Mercy Mwangi,F,3,Gate A
+142,Winnie Njoroge,F,2,Bomas
+143,Winnie Otieno,F,1,King'ong'o
+144,Mercy Chebet,F,1,Internal Hostels
+145,Samuel Kiptoo,M,1,Nyeri View
+146,Victor Achieng,M,2,Kahawa
+147,Winnie Muriuki,F,3,Nyeri Town
+148,Diana Chebet,F,1,Bomas
+149,James Kiptoo,M,1,Internal Hostels
+150,David Wafula,M,1,Internal Hostels
