@@ -1,0 +1,29 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "1920281141970339",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15551529232",
+              "phone_number_id": "1170705272801029"
+            },
+            "messages": [
+              {
+                "from": "254737649565",
+                "id": "test123",
+                "timestamp": "1784792139",
+                "text": { "body": "Direct test message" },
+                "type": "text"
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}
