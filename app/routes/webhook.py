@@ -18,6 +18,9 @@ import os
 import requests
 from flask import Blueprint, request, jsonify
 
+from app.models.pending_registration import get_pending_registration
+from app.services.registration import is_registered, start_registration, handle_message
+
 webhook_bp = Blueprint("webhook", __name__)
 
 # These come from your .env file -- never typed directly into code.
@@ -68,15 +71,38 @@ def receive_message():
 
         print(f"Message from {sender_number}: {message_text}")
 
+        reply_text = route_incoming_message(sender_number, message_text)
+
         send_whatsapp_message(
             to_number=sender_number,
-            message_text="Hello! I received your message. (This is the Stage 1 test reply.)"
+            message_text=reply_text
         )
 
     except (KeyError, IndexError) as e:
         print(f"Could not parse incoming webhook: {e}")
 
     return jsonify({"status": "received"}), 200
+
+
+def route_incoming_message(sender_number, message_text):
+    """
+    Stage 3: decides what to do with an incoming message.
+
+    - Already-registered member: placeholder for now -- this is
+      exactly what Stage 4 (the intent router) will take over.
+    - Mid-registration (a pending row exists): hand off to the
+      registration conversation to advance to the next step.
+    - Brand-new sender (no member, no pending registration): kick
+      off registration with the greeting + first question.
+    """
+    if is_registered(sender_number):
+        # Stage 4 (intent router) will replace this.
+        return "Hi again! (Full conversation handling is coming in a later stage.)"
+
+    if get_pending_registration(sender_number) is not None:
+        return handle_message(sender_number, message_text)
+
+    return start_registration(sender_number)
 
 
 def send_whatsapp_message(to_number, message_text):
