@@ -52,8 +52,16 @@ def init_pending_registrations_table():
             area TEXT,
             data_consent BOOLEAN,
             followup_consent BOOLEAN,
-            started_at TIMESTAMP
+            started_at TIMESTAMP,
+            correcting BOOLEAN DEFAULT FALSE
         )
+    """)
+
+    # ADD COLUMN IF NOT EXISTS so this also patches the table that
+    # was already created on Neon before this flag existed.
+    cursor.execute("""
+        ALTER TABLE pending_registrations
+        ADD COLUMN IF NOT EXISTS correcting BOOLEAN DEFAULT FALSE
     """)
 
     conn.commit()
