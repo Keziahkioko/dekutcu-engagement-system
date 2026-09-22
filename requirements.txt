@@ -3,3 +3,4 @@ gunicorn==26.0.0
 python-dotenv==1.2.2
 requests==2.33.1
 psycopg2-binary
+groq==1.7.0
