@@ -20,6 +20,18 @@ Consent is split into two separate fields, not one:
     active-membership/welfare-eligibility status -- that depends on
     actual attendance, not on follow-up opt-in.
 
+is_leader gates the leader-only intents in intent_router.py (e.g.
+allocate_groups, reshuffle_groups, leadership_query, send_announcement).
+There's no self-service way to become a leader -- it's set manually in
+the database for now.
+
+group_label is the Bible study group a member is currently placed in
+(e.g. "Bomas #2"), written by the Stage 5 allocation engine. NULL means
+not yet placed -- either the allocation engine hasn't run for them yet,
+or they were flagged for manual placement (area too small), or their
+old placement was cleared (e.g. after withdrawing consent, or an area
+change awaiting a leader's manual reassignment).
+
 Runs on PostgreSQL (see app/database.py). SQL placeholders use %s
 (psycopg2 style), not sqlite3's ?.
 """
@@ -29,8 +41,10 @@ from app.database import get_connection
 
 def init_members_table():
     """
-    Creates the Members table if it does not already exist.
-    Safe to call every time the app starts.
+    Creates the Members table if it does not already exist, and adds
+    any columns introduced after the table's first creation. Both
+    statements are idempotent -- safe to call every time the app
+    starts, whether the table is brand new or already live.
     """
     conn = get_connection()
     cursor = conn.cursor()
@@ -48,6 +62,15 @@ def init_members_table():
             followup_consent BOOLEAN DEFAULT FALSE,
             registered_at TIMESTAMP
         )
+    """)
+
+    cursor.execute("""
+        ALTER TABLE members
+        ADD COLUMN IF NOT EXISTS is_leader BOOLEAN DEFAULT FALSE NOT NULL
+    """)
+    cursor.execute("""
+        ALTER TABLE members
+        ADD COLUMN IF NOT EXISTS group_label TEXT
     """)
 
     conn.commit()
@@ -116,6 +139,40 @@ def relink_whatsapp_id(reg_number, new_whatsapp_id):
         "UPDATE members SET whatsapp_id = %s WHERE reg_number = %s",
         (new_whatsapp_id, reg_number)
     )
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def get_data_consenting_members():
+    """
+    Returns every member with data_consent = TRUE -- the eligible pool
+    for the Stage 5 allocation engine. Includes each member's current
+    group_label (NULL if unplaced), so allocate_members_topup can tell
+    who's already placed apart from who's new.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM members WHERE data_consent = TRUE")
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
+
+
+def set_group_labels(updates):
+    """
+    Bulk-writes group_label for a batch of members, keyed by
+    reg_number (the permanent identity -- not whatsapp_id, which can
+    change). `updates` is a dict of {reg_number: group_label}.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    for reg_number, group_label in updates.items():
+        cursor.execute(
+            "UPDATE members SET group_label = %s WHERE reg_number = %s",
+            (group_label, reg_number)
+        )
     conn.commit()
     cursor.close()
     conn.close()

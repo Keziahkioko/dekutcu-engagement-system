@@ -14,7 +14,6 @@ What this file does, in plain terms:
 """
 
 import os
-import requests
 from flask import Blueprint, request, jsonify
 
 from app.models.pending_registration import get_pending_registration, delete_pending_registration
@@ -27,12 +26,9 @@ from app.services.intent_router import (
     handle_pending_action_response,
     handle_message as handle_intent_message,
 )
+from app.services.whatsapp_client import send_whatsapp_message
 
 webhook_bp = Blueprint("webhook", __name__)
-
-# These come from your .env file -- never typed directly into code.
-WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
-WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
 
 # This is a secret word WE make up ourselves -- not from Meta.
 VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "dekutcu_verify_2026")
@@ -153,34 +149,6 @@ def _handle_global_resume(sender_number):
         return "Welcome back! Follow-up check-ins are switched back on."
 
     return "You're not currently registered. Message me anytime to get started."
-
-
-def send_whatsapp_message(to_number, message_text):
-    """
-    Sends a WhatsApp message using Meta's API.
-    """
-    url = f"https://graph.facebook.com/v21.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
-
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to_number,
-        "type": "text",
-        "text": {"body": message_text},
-    }
-
-    response = requests.post(url, headers=headers, json=payload)
-
-    if response.status_code == 200:
-        print(f"Message sent successfully to {to_number}")
-    else:
-        print(f"Failed to send message. Status: {response.status_code}, Response: {response.text}")
-
-    return response
 
 
 @webhook_bp.route("/", methods=["GET"])

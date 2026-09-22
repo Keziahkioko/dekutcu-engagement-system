@@ -17,18 +17,26 @@ classifier having a good day.
 Design note on scope: several intents below are stubbed -- they
 correctly recognize what the member wants, but the real handler
 (e.g. actually showing upcoming events) belongs to a later stage
-that hasn't been built yet. Three intents (update_details,
-unsubscribe_followup, withdraw_data_consent) are genuinely handled
-here since they only need the Members table, which already exists.
+that hasn't been built yet. update_details, unsubscribe_followup, and
+withdraw_data_consent are genuinely handled here since they only need
+the Members table, which already exists. allocate_groups and
+reshuffle_groups (Stage 5) are also genuinely handled -- they trigger
+the allocation engine in app/services/allocation.py in a background
+thread (the ILP solve is too slow to run inside the webhook request --
+see Stage 5 planning notes) and message the leader again once it's
+done.
 """
 
 import os
 import json
+import threading
 from groq import Groq
 
-from app.models.member import get_member_by_whatsapp_id
+from app.models.member import get_member_by_whatsapp_id, get_data_consenting_members, set_group_labels
 from app.models.pending_action import set_pending_action, get_pending_action, clear_pending_action
 from app.database import get_connection
+from app.services.allocation import allocate_members_topup, allocate_members_ilp
+from app.services.whatsapp_client import send_whatsapp_message
 
 GROQ_MODEL = "openai/gpt-oss-20b"
 
@@ -52,12 +60,18 @@ INTENT_DEFINITIONS = {
     "needs_support": "Message shows real distress or a serious personal struggle, even without explicitly asking for a human.",
     "leadership_query": "A leader asking for organizational data or a report (e.g. attendance numbers).",
     "send_announcement": "A leader wanting to broadcast a message to all members.",
+    "allocate_groups": "A leader wanting to place new (ungrouped) members into Bible study groups.",
+    "reshuffle_groups": "A leader wanting to fully regenerate every group from scratch, discarding existing placements.",
     "unclear": "Doesn't confidently match any of the above.",
 }
 
 VALID_INTENTS = set(INTENT_DEFINITIONS.keys())
 
-LEADER_ONLY_INTENTS = {"leadership_query", "send_announcement"}
+LEADER_ONLY_INTENTS = {"leadership_query", "send_announcement", "allocate_groups", "reshuffle_groups"}
+
+# Guards against two allocation runs (each ~10-15 seconds) overlapping
+# if a leader triggers this more than once before the first finishes.
+_allocation_lock = threading.Lock()
 
 
 def _build_system_prompt():
@@ -159,6 +173,19 @@ CONFIRMATION_QUESTIONS = {
         "and text STOP instead.\n\n"
         "Reply YES to confirm you want to withdraw completely, or NO to cancel."
     ),
+    "allocate_groups": (
+        "This will place any new (not-yet-grouped) members into Bible study "
+        "groups, without moving anyone who's already placed. It takes about "
+        "10-15 seconds -- I'll message you again once it's done.\n\n"
+        "Reply YES to confirm, or NO to cancel."
+    ),
+    "reshuffle_groups": (
+        "This will move EVERYONE into new groups, not just new members -- "
+        "existing group placements will NOT be preserved. This is a bigger "
+        "action than the usual allocation command. It takes about 10-15 "
+        "seconds -- I'll message you again once it's done.\n\n"
+        "Reply YES to confirm you want a full reshuffle, or NO to cancel."
+    ),
 }
 
 
@@ -181,17 +208,108 @@ def withdraw_all_consent(whatsapp_id):
     """
     Sets BOTH consent flags to False -- the full, deliberate
     withdrawal, distinct from STOP/unsubscribe_followup which only
-    ever touches followup_consent.
+    ever touches followup_consent. Also clears group_label: a
+    withdrawn member shouldn't keep "occupying" a slot the allocation
+    engine thinks is taken, so a future run can offer it to someone else.
     """
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE members SET data_consent = FALSE, followup_consent = FALSE WHERE whatsapp_id = %s",
+        "UPDATE members SET data_consent = FALSE, followup_consent = FALSE, group_label = NULL WHERE whatsapp_id = %s",
         (whatsapp_id,)
     )
     conn.commit()
     cursor.close()
     conn.close()
+
+
+# ---------------------------------------------------------------------
+# Stage 5: allocate_groups / reshuffle_groups. Both run the actual
+# allocation engine in a background thread (see module docstring for
+# why) and message the leader again once it's done.
+# ---------------------------------------------------------------------
+
+def _handle_allocate_groups(member, text):
+    set_pending_action(member["whatsapp_id"], "allocate_groups")
+    return CONFIRMATION_QUESTIONS["allocate_groups"]
+
+
+def _handle_reshuffle_groups(member, text):
+    set_pending_action(member["whatsapp_id"], "reshuffle_groups")
+    return CONFIRMATION_QUESTIONS["reshuffle_groups"]
+
+
+def _start_allocation_job(whatsapp_id, action):
+    """
+    Tries to claim _allocation_lock and, if successful, starts the
+    background job. If a run is already in progress, tells the leader
+    to wait instead of starting a second, overlapping one.
+    """
+    if not _allocation_lock.acquire(blocking=False):
+        return "An allocation is already in progress -- please wait for it to finish."
+
+    mode = "reshuffle" if action == "reshuffle_groups" else "topup"
+    thread = threading.Thread(target=_run_allocation_job, args=(whatsapp_id, mode), daemon=True)
+    thread.start()
+
+    return "Working on it -- I'll message you again once it's done (about 10-15 seconds)."
+
+
+def _run_allocation_job(whatsapp_id, mode):
+    """
+    Runs in the background thread started by _start_allocation_job.
+    Always releases _allocation_lock when done, even on error, so a
+    failure can't leave the system permanently "stuck busy".
+    """
+    try:
+        members = get_data_consenting_members()
+
+        if mode == "reshuffle":
+            result = allocate_members_ilp(members)
+            updates = _labels_from_groups(result["groups"])
+        else:
+            result = allocate_members_topup(members)
+            updates = result["updates"]
+
+        if updates:
+            set_group_labels(updates)
+
+        summary = _build_allocation_summary(updates, result["flagged_areas"], mode)
+    except Exception as e:
+        summary = f"Something went wrong while generating groups: {e}"
+    finally:
+        _allocation_lock.release()
+
+    send_whatsapp_message(whatsapp_id, summary)
+
+
+def _labels_from_groups(groups_by_area):
+    """Converts allocate_members_ilp's {area: [[member,...],...]} into {reg_number: label}."""
+    updates = {}
+    for area, groups in groups_by_area.items():
+        for i, group_members in enumerate(groups, start=1):
+            label = f"{area} #{i}"
+            for member in group_members:
+                updates[member["reg_number"]] = label
+    return updates
+
+
+def _build_allocation_summary(updates, flagged_areas, mode):
+    verb = "Reshuffle" if mode == "reshuffle" else "Allocation"
+
+    if not updates and not flagged_areas:
+        return f"{verb} complete -- no new members needed placing."
+
+    group_count = len(set(updates.values()))
+    lines = [f"{verb} complete. {len(updates)} member(s) placed into {group_count} group(s)."]
+
+    if flagged_areas:
+        lines.append("")
+        lines.append(f"{len(flagged_areas)} area(s) flagged for manual placement (too few members):")
+        for area, area_members in flagged_areas.items():
+            lines.append(f"- {area}: {len(area_members)}")
+
+    return "\n".join(lines)
 
 
 def handle_pending_action_response(whatsapp_id, text):
@@ -235,6 +353,8 @@ def handle_pending_action_response(whatsapp_id, text):
             "active tracked member. If you'd like to fully rejoin later, "
             "just message me again to re-register."
         )
+    elif action in ("allocate_groups", "reshuffle_groups"):
+        return _start_allocation_job(whatsapp_id, action)
 
     return "Something went wrong processing that -- please try again."
 
@@ -292,5 +412,7 @@ _STUB_HANDLERS = {
     "needs_support": _handle_stub("Connecting you to a leader"),
     "leadership_query": _handle_stub("Leadership reports"),
     "send_announcement": _handle_stub("Sending announcements"),
+    "allocate_groups": _handle_allocate_groups,
+    "reshuffle_groups": _handle_reshuffle_groups,
     "unclear": _handle_unclear,
 }
