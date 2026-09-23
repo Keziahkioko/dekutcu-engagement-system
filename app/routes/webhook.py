@@ -18,6 +18,7 @@ from flask import Blueprint, request, jsonify
 
 from app.models.pending_registration import get_pending_registration, delete_pending_registration
 from app.models.pending_action import get_pending_action
+from app.models.pending_leader_nomination import get_pending_leader_nomination
 from app.services.registration import is_registered, start_registration, handle_message
 from app.services.intent_router import (
     is_stop_message,
@@ -26,6 +27,7 @@ from app.services.intent_router import (
     handle_pending_action_response,
     handle_message as handle_intent_message,
 )
+from app.services import leader_assignment
 from app.services.whatsapp_client import send_whatsapp_message
 
 webhook_bp = Blueprint("webhook", __name__)
@@ -97,13 +99,17 @@ def route_incoming_message(sender_number, message_text):
        design notes. Neither depends on the LLM classifier.
     2. Already-registered member with a pending confirmation (e.g.
        they were just asked "are you sure?" for unsubscribe_followup,
-       resume_followup, or withdraw_data_consent): their next reply
-       is matched to that confirmation, NOT reclassified by the LLM.
-    3. Already-registered member, no pending confirmation: hand off
-       to the real intent router (Stage 4).
-    4. Mid-registration (a pending row exists): continue the
+       resume_followup, withdraw_data_consent, or a leader-nomination
+       accept/decline): their next reply is matched to that
+       confirmation, NOT reclassified by the LLM.
+    3. Already-registered member mid-way through nominating a group
+       leader (Stage 6, a multi-step conversation -- see
+       leader_assignment.py): continue that conversation.
+    4. Already-registered member, no pending confirmation or
+       nomination: hand off to the real intent router (Stage 4).
+    5. Mid-registration (a pending row exists): continue the
        registration conversation.
-    5. Brand-new sender: kick off registration.
+    6. Brand-new sender: kick off registration.
     """
     if is_stop_message(message_text):
         return _handle_global_stop(sender_number)
@@ -114,6 +120,8 @@ def route_incoming_message(sender_number, message_text):
     if is_registered(sender_number):
         if get_pending_action(sender_number) is not None:
             return handle_pending_action_response(sender_number, message_text)
+        if get_pending_leader_nomination(sender_number) is not None:
+            return leader_assignment.handle_message(sender_number, message_text)
         return handle_intent_message(sender_number, message_text)
 
     if get_pending_registration(sender_number) is not None:

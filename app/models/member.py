@@ -32,6 +32,19 @@ or they were flagged for manual placement (area too small), or their
 old placement was cleared (e.g. after withdrawing consent, or an area
 change awaiting a leader's manual reassignment).
 
+Stage 6 adds group-LEADER tracking (distinct from is_leader, which
+gates exec/organizational actions -- a group leader runs one specific
+area's Bible study, doesn't necessarily do allocation/reporting):
+  - leader_of_area: the area they're a CONFIRMED group leader for.
+    NULL if not currently a leader. Group leaders are recruited before
+    allocation runs, so this is tied to an area, not a specific
+    numbered group (which doesn't exist yet at recruitment time).
+  - pending_leader_area / pending_leader_nominator: set while a
+    nomination is awaiting the candidate's own YES/NO reply (see
+    app/services/leader_assignment.py). pending_leader_nominator is
+    the nominating exec leader's whatsapp_id, so the outcome (accept
+    or decline) can be reported back to whoever asked.
+
 Runs on PostgreSQL (see app/database.py). SQL placeholders use %s
 (psycopg2 style), not sqlite3's ?.
 """
@@ -71,6 +84,18 @@ def init_members_table():
     cursor.execute("""
         ALTER TABLE members
         ADD COLUMN IF NOT EXISTS group_label TEXT
+    """)
+    cursor.execute("""
+        ALTER TABLE members
+        ADD COLUMN IF NOT EXISTS leader_of_area TEXT
+    """)
+    cursor.execute("""
+        ALTER TABLE members
+        ADD COLUMN IF NOT EXISTS pending_leader_area TEXT
+    """)
+    cursor.execute("""
+        ALTER TABLE members
+        ADD COLUMN IF NOT EXISTS pending_leader_nominator TEXT
     """)
 
     conn.commit()
@@ -226,3 +251,146 @@ def get_group_summary():
     cursor.close()
     conn.close()
     return group_counts, unplaced
+
+
+def get_members_by_area(area):
+    """Registered (data-consenting) members in one area, alphabetical -- used to build a candidate list."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM members WHERE area = %s AND data_consent = TRUE ORDER BY name",
+        (area,)
+    )
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
+
+
+def nominate_leader(reg_number, area, nominator_whatsapp_id):
+    """
+    Records that `reg_number` has been asked to lead `area`'s group,
+    by the leader at `nominator_whatsapp_id`. Overwrites any existing
+    pending nomination for them -- a new request supersedes an old,
+    presumably abandoned one, same as set_pending_action.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE members SET pending_leader_area = %s, pending_leader_nominator = %s WHERE reg_number = %s",
+        (area, nominator_whatsapp_id, reg_number)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def assign_leader_directly(reg_number, area):
+    """Bypass path: the exec leader already has the candidate's agreement -- confirm immediately, no reply needed."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE members SET leader_of_area = %s, pending_leader_area = NULL, pending_leader_nominator = NULL WHERE reg_number = %s",
+        (area, reg_number)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def confirm_leader_nomination(whatsapp_id):
+    """Candidate accepted: promotes their pending_leader_area to leader_of_area."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE members
+        SET leader_of_area = pending_leader_area,
+            pending_leader_area = NULL,
+            pending_leader_nominator = NULL
+        WHERE whatsapp_id = %s
+    """, (whatsapp_id,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def decline_leader_nomination(whatsapp_id):
+    """Candidate declined: just clears the pending fields, leader_of_area untouched."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE members SET pending_leader_area = NULL, pending_leader_nominator = NULL WHERE whatsapp_id = %s",
+        (whatsapp_id,)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def remove_leader(reg_number):
+    """Removes someone as a confirmed area leader (they quit, moved, etc.) -- the slot is open again."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE members SET leader_of_area = NULL WHERE reg_number = %s", (reg_number,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def get_leader_status():
+    """
+    Returns (confirmed, pending) for the view_group_leaders report:
+    confirmed is a list of (area, name) for every leader_of_area
+    that's set; pending is a list of (area, name) for every
+    pending_leader_area that's set. Both ordered by area then name.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT leader_of_area AS area, name FROM members WHERE leader_of_area IS NOT NULL ORDER BY leader_of_area, name"
+    )
+    confirmed = [(row["area"], row["name"]) for row in cursor.fetchall()]
+
+    cursor.execute(
+        "SELECT pending_leader_area AS area, name FROM members WHERE pending_leader_area IS NOT NULL ORDER BY pending_leader_area, name"
+    )
+    pending = [(row["area"], row["name"]) for row in cursor.fetchall()]
+
+    cursor.close()
+    conn.close()
+    return confirmed, pending
+
+
+def get_pending_leader_nominees():
+    """
+    Returns (reg_number, name, area) for everyone with a pending leader
+    nomination, ordered by area then name -- used to build the
+    numbered "who accepted?" list for manually resolving a pending
+    nomination outside their own YES/NO reply.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT reg_number, name, pending_leader_area AS area
+        FROM members WHERE pending_leader_area IS NOT NULL
+        ORDER BY pending_leader_area, name
+    """)
+    rows = [(row["reg_number"], row["name"], row["area"]) for row in cursor.fetchall()]
+    cursor.close()
+    conn.close()
+    return rows
+
+
+def get_confirmed_leaders():
+    """Returns (reg_number, name, area) for every confirmed group leader -- used to build the "remove a leader" numbered list."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT reg_number, name, leader_of_area AS area
+        FROM members WHERE leader_of_area IS NOT NULL
+        ORDER BY leader_of_area, name
+    """)
+    rows = [(row["reg_number"], row["name"], row["area"]) for row in cursor.fetchall()]
+    cursor.close()
+    conn.close()
+    return rows

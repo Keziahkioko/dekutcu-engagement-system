@@ -16,6 +16,7 @@ from app.routes.webhook import webhook_bp
 from app.models.member import init_members_table
 from app.models.pending_registration import init_pending_registrations_table
 from app.models.pending_action import init_pending_actions_table
+from app.models.pending_leader_nomination import init_pending_leader_nominations_table
 
 
 def create_app():
@@ -30,5 +31,6 @@ def create_app():
     init_members_table()
     init_pending_registrations_table()
     init_pending_actions_table()
+    init_pending_leader_nominations_table()
 
     return app

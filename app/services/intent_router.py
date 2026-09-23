@@ -25,6 +25,16 @@ the allocation engine in app/services/allocation.py in a background
 thread (the ILP solve is too slow to run inside the webhook request --
 see Stage 5 planning notes) and message the leader again once it's
 done.
+
+Stage 6 adds group-LEADER management: nominate_group_leader,
+view_group_leaders, resolve_pending_leader, and remove_group_leader
+are genuinely handled, delegating the multi-step nomination
+conversation to app/services/leader_assignment.py. A nominated
+candidate's own accept/decline reply is handled right here, though,
+via accept_leader_nomination -- it's a one-shot YES/NO, so it reuses
+the existing pending_actions mechanism rather than needing its own
+multi-step state (see leader_assignment.py's docstring for why that
+split makes sense).
 """
 
 import os
@@ -38,11 +48,16 @@ from app.models.member import (
     set_group_labels,
     count_group_placement_status,
     get_group_summary,
+    confirm_leader_nomination,
+    decline_leader_nomination,
+    get_leader_status,
 )
 from app.models.pending_action import set_pending_action, get_pending_action, clear_pending_action
 from app.database import get_connection
 from app.services.allocation import allocate_members_topup, allocate_members_ilp
 from app.services.whatsapp_client import send_whatsapp_message
+from app.services.registration import AREAS
+from app.services import leader_assignment
 
 GROQ_MODEL = "openai/gpt-oss-20b"
 
@@ -69,13 +84,18 @@ INTENT_DEFINITIONS = {
     "allocate_groups": "A leader wanting to place new (ungrouped) members into Bible study groups.",
     "reshuffle_groups": "A leader wanting to fully regenerate every group from scratch, discarding existing placements.",
     "view_groups": "A leader wanting to see a summary of how members have been allocated into Bible study groups.",
+    "nominate_group_leader": "A leader wanting to nominate or assign someone as a Bible study group leader for an area.",
+    "view_group_leaders": "A leader wanting to see who the group leaders are -- confirmed, pending, or areas with no leader yet.",
+    "resolve_pending_leader": "A leader wanting to manually confirm that a pending group-leader candidate has accepted, e.g. because they agreed in person rather than replying on WhatsApp.",
+    "remove_group_leader": "A leader wanting to remove someone as a group leader.",
     "unclear": "Doesn't confidently match any of the above.",
 }
 
 VALID_INTENTS = set(INTENT_DEFINITIONS.keys())
 
 LEADER_ONLY_INTENTS = {
-    "leadership_query", "send_announcement", "allocate_groups", "reshuffle_groups", "view_groups"
+    "leadership_query", "send_announcement", "allocate_groups", "reshuffle_groups", "view_groups",
+    "nominate_group_leader", "view_group_leaders", "resolve_pending_leader", "remove_group_leader",
 }
 
 # Guards against two allocation runs (each ~10-15 seconds) overlapping
@@ -267,15 +287,23 @@ def _allocate_groups_confirmation_text(placed, unplaced):
     )
 
 
-def _confirmation_text(action):
+def _confirmation_text(action, whatsapp_id):
     """
-    Returns the confirmation question for `action`. allocate_groups is
-    computed fresh each time (its wording depends on current placement
-    counts); every other action's text is static.
+    Returns the confirmation question for `action`. allocate_groups and
+    accept_leader_nomination are computed fresh each time (the first
+    depends on current placement counts, the second on which area
+    THIS specific member is being asked about); every other action's
+    text is static.
     """
     if action == "allocate_groups":
         placed, unplaced = count_group_placement_status()
         return _allocate_groups_confirmation_text(placed, unplaced)
+    if action == "accept_leader_nomination":
+        member = get_member_by_whatsapp_id(whatsapp_id)
+        return (
+            f"You've been asked to lead a Bible Study group in "
+            f"{member['pending_leader_area']}. Reply YES to accept, or NO to decline."
+        )
     return CONFIRMATION_QUESTIONS[action]
 
 
@@ -304,6 +332,65 @@ def _handle_view_groups(member, text):
         lines.append(f"{unplaced} member(s) not yet grouped.")
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------
+# Stage 6: group leader management. nominate/resolve/remove all
+# delegate their multi-step conversation to leader_assignment.py --
+# see that module's docstring. view_group_leaders is read-only, no
+# multi-step conversation needed.
+# ---------------------------------------------------------------------
+
+def _handle_nominate_group_leader(member, text):
+    return leader_assignment.start_nomination(member["whatsapp_id"])
+
+
+def _handle_resolve_pending_leader(member, text):
+    return leader_assignment.start_resolve_pending(member["whatsapp_id"])
+
+
+def _handle_remove_group_leader(member, text):
+    return leader_assignment.start_remove_leader(member["whatsapp_id"])
+
+
+def _handle_view_group_leaders(member, text):
+    confirmed, pending = get_leader_status()
+    covered_areas = {area for area, _ in confirmed} | {area for area, _ in pending}
+    unassigned_areas = [a for a in AREAS if a not in covered_areas]
+
+    lines = ["Group leaders:"]
+    if confirmed:
+        lines.append("")
+        lines.append("Confirmed:")
+        lines.extend(f"- {area}: {name}" for area, name in confirmed)
+    if pending:
+        lines.append("")
+        lines.append("Pending (awaiting their response):")
+        lines.extend(f"- {area}: {name}" for area, name in pending)
+    if unassigned_areas:
+        lines.append("")
+        lines.append("No leader yet: " + ", ".join(unassigned_areas))
+
+    return "\n".join(lines)
+
+
+def _resolve_leader_nomination(whatsapp_id, accepted):
+    """
+    Handles the CANDIDATE's own reply to a leader nomination -- notifies
+    whoever nominated them either way, so they're not left wondering.
+    """
+    member = get_member_by_whatsapp_id(whatsapp_id)
+    area = member["pending_leader_area"]
+    nominator_whatsapp_id = member["pending_leader_nominator"]
+
+    if accepted:
+        confirm_leader_nomination(whatsapp_id)
+        send_whatsapp_message(nominator_whatsapp_id, f"{member['name']} accepted -- they're now the leader for {area}.")
+        return f"Great, you're now the leader for {area}! Thank you."
+
+    decline_leader_nomination(whatsapp_id)
+    send_whatsapp_message(nominator_whatsapp_id, f"{member['name']} declined the {area} leader role.")
+    return "No problem -- thanks for letting us know."
 
 
 def _start_allocation_job(whatsapp_id, action):
@@ -396,9 +483,15 @@ def handle_pending_action_response(whatsapp_id, text):
         # Re-ask rather than silently falling through to the intent
         # router -- a half-confirmed serious action shouldn't be lost
         # to an ambiguous reply.
-        return f"Please reply YES or NO.\n\n{_confirmation_text(action)}"
+        return f"Please reply YES or NO.\n\n{_confirmation_text(action, whatsapp_id)}"
 
     clear_pending_action(whatsapp_id)
+
+    if action == "accept_leader_nomination":
+        # Own branch, not the generic "no" shortcut below -- declining
+        # needs to clear the pending fields AND notify whoever sent
+        # the nomination, not just drop a pending_actions row.
+        return _resolve_leader_nomination(whatsapp_id, accepted=(answer == "yes"))
 
     if answer == "no":
         return "No problem, nothing has changed."
@@ -482,5 +575,9 @@ _STUB_HANDLERS = {
     "allocate_groups": _handle_allocate_groups,
     "reshuffle_groups": _handle_reshuffle_groups,
     "view_groups": _handle_view_groups,
+    "nominate_group_leader": _handle_nominate_group_leader,
+    "view_group_leaders": _handle_view_group_leaders,
+    "resolve_pending_leader": _handle_resolve_pending_leader,
+    "remove_group_leader": _handle_remove_group_leader,
     "unclear": _handle_unclear,
 }
