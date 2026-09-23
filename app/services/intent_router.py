@@ -355,14 +355,16 @@ def _handle_remove_group_leader(member, text):
 
 def _handle_view_group_leaders(member, text):
     confirmed, pending = get_leader_status()
-    covered_areas = {area for area, _ in confirmed} | {area for area, _ in pending}
+    covered_areas = {area for area, _, _ in confirmed} | {area for area, _ in pending}
     unassigned_areas = [a for a in AREAS if a not in covered_areas]
 
     lines = ["Group leaders:"]
     if confirmed:
         lines.append("")
         lines.append("Confirmed:")
-        lines.extend(f"- {area}: {name}" for area, name in confirmed)
+        # leads_group_label (e.g. "Bomas #2") if matched to a specific
+        # formed group yet, else falls back to just the area name.
+        lines.extend(f"- {group_label or area}: {name}" for area, name, group_label in confirmed)
     if pending:
         lines.append("")
         lines.append("Pending (awaiting their response):")
@@ -386,6 +388,7 @@ def _resolve_leader_nomination(whatsapp_id, accepted):
     if accepted:
         confirm_leader_nomination(whatsapp_id)
         send_whatsapp_message(nominator_whatsapp_id, f"{member['name']} accepted -- they're now the leader for {area}.")
+        leader_assignment.match_and_notify(area)
         return f"Great, you're now the leader for {area}! Thank you."
 
     decline_leader_nomination(whatsapp_id)
@@ -427,6 +430,8 @@ def _run_allocation_job(whatsapp_id, mode):
 
         if updates:
             set_group_labels(updates)
+            for area in {_area_from_label(label) for label in updates.values()}:
+                leader_assignment.match_and_notify(area)
 
         summary = _build_allocation_summary(updates, result["flagged_areas"], mode)
     except Exception as e:
@@ -435,6 +440,11 @@ def _run_allocation_job(whatsapp_id, mode):
         _allocation_lock.release()
 
     send_whatsapp_message(whatsapp_id, summary)
+
+
+def _area_from_label(group_label):
+    """"Bomas #2" -> "Bomas" -- group labels are always "{area} #{n}"."""
+    return group_label.rsplit(" #", 1)[0]
 
 
 def _labels_from_groups(groups_by_area):

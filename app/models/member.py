@@ -44,6 +44,13 @@ area's Bible study, doesn't necessarily do allocation/reporting):
     app/services/leader_assignment.py). pending_leader_nominator is
     the nominating exec leader's whatsapp_id, so the outcome (accept
     or decline) can be reported back to whoever asked.
+  - leads_group_label: the SPECIFIC formed group they've been matched
+    to (e.g. "Bomas #2"), once allocation has actually formed enough
+    groups in their area to match them to one. NULL until matched --
+    leader_of_area can be set while this is still NULL, meaning
+    "confirmed leader, no specific group yet" (not enough groups
+    formed in their area, or allocation hasn't run since they were
+    confirmed). See match_leaders_to_groups().
 
 Runs on PostgreSQL (see app/database.py). SQL placeholders use %s
 (psycopg2 style), not sqlite3's ?.
@@ -96,6 +103,10 @@ def init_members_table():
     cursor.execute("""
         ALTER TABLE members
         ADD COLUMN IF NOT EXISTS pending_leader_nominator TEXT
+    """)
+    cursor.execute("""
+        ALTER TABLE members
+        ADD COLUMN IF NOT EXISTS leads_group_label TEXT
     """)
 
     conn.commit()
@@ -328,28 +339,82 @@ def decline_leader_nomination(whatsapp_id):
 
 
 def remove_leader(reg_number):
-    """Removes someone as a confirmed area leader (they quit, moved, etc.) -- the slot is open again."""
+    """
+    Removes someone as a confirmed area leader (they quit, moved,
+    etc.) -- clears BOTH leader_of_area and leads_group_label, so
+    their specific group (if they had one) becomes leaderless again
+    and eligible to be matched to someone else.
+    """
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE members SET leader_of_area = NULL WHERE reg_number = %s", (reg_number,))
+    cursor.execute(
+        "UPDATE members SET leader_of_area = NULL, leads_group_label = NULL WHERE reg_number = %s",
+        (reg_number,)
+    )
     conn.commit()
     cursor.close()
     conn.close()
 
 
+def match_leaders_to_groups(area):
+    """
+    Matches as many unmatched, confirmed area leaders to as many
+    leaderless formed groups as possible, 1:1, for one area. Safe to
+    call any time the matching might have changed on either side --
+    allocation just formed/updated groups, or a leader was just
+    confirmed -- since it only ever touches genuinely-unmatched pairs.
+
+    Returns the list of (reg_number, group_label) pairs matched just
+    now, so the caller can notify those specific leaders.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT DISTINCT group_label FROM members
+        WHERE area = %s AND group_label IS NOT NULL
+        AND group_label NOT IN (
+            SELECT leads_group_label FROM members WHERE leads_group_label IS NOT NULL
+        )
+        ORDER BY group_label
+    """, (area,))
+    unleadered_groups = [row["group_label"] for row in cursor.fetchall()]
+
+    cursor.execute("""
+        SELECT reg_number FROM members
+        WHERE leader_of_area = %s AND leads_group_label IS NULL
+        ORDER BY name
+    """, (area,))
+    available_leaders = [row["reg_number"] for row in cursor.fetchall()]
+
+    matches = list(zip(available_leaders, unleadered_groups))
+    for leader_reg_number, group_label in matches:
+        cursor.execute(
+            "UPDATE members SET leads_group_label = %s WHERE reg_number = %s",
+            (group_label, leader_reg_number)
+        )
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return matches
+
+
 def get_leader_status():
     """
     Returns (confirmed, pending) for the view_group_leaders report:
-    confirmed is a list of (area, name) for every leader_of_area
-    that's set; pending is a list of (area, name) for every
+    confirmed is a list of (area, name, leads_group_label) for every
+    leader_of_area that's set -- leads_group_label is None if they're
+    a confirmed area leader not yet matched to a specific formed
+    group; pending is a list of (area, name) for every
     pending_leader_area that's set. Both ordered by area then name.
     """
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT leader_of_area AS area, name FROM members WHERE leader_of_area IS NOT NULL ORDER BY leader_of_area, name"
+        "SELECT leader_of_area AS area, name, leads_group_label FROM members WHERE leader_of_area IS NOT NULL ORDER BY leader_of_area, name"
     )
-    confirmed = [(row["area"], row["name"]) for row in cursor.fetchall()]
+    confirmed = [(row["area"], row["name"], row["leads_group_label"]) for row in cursor.fetchall()]
 
     cursor.execute(
         "SELECT pending_leader_area AS area, name FROM members WHERE pending_leader_area IS NOT NULL ORDER BY pending_leader_area, name"

@@ -43,6 +43,7 @@ from app.models.member import (
     remove_leader,
     get_pending_leader_nominees,
     get_confirmed_leaders,
+    match_leaders_to_groups,
 )
 from app.models.pending_leader_nomination import (
     get_pending_leader_nomination,
@@ -62,6 +63,22 @@ def _now():
 def _areas_list_text():
     lines = [f"{i + 1}. {area}" for i, area in enumerate(AREAS)]
     return "\n".join(lines)
+
+
+def match_and_notify(area):
+    """
+    Matches any newly-available leaders to any newly-unleadered groups
+    in `area` -- call this after allocation forms/updates groups, or
+    right after a leader is freshly confirmed (bypass, accepted
+    nomination, or manually resolved) -- and messages each
+    newly-matched leader which specific group they've been assigned.
+    """
+    matches = match_leaders_to_groups(area)
+    for leader_reg_number, group_label in matches:
+        leader = get_member_by_reg_number(leader_reg_number)
+        if leader["whatsapp_id"]:
+            send_whatsapp_message(leader["whatsapp_id"], f"You've been assigned to lead {group_label}!")
+    return matches
 
 
 def start_nomination(whatsapp_id):
@@ -192,6 +209,9 @@ def _handle_bypass_choice(whatsapp_id, text, pending):
 
     if answer == "yes":
         assign_leader_directly(candidate["reg_number"], area)
+        if candidate["whatsapp_id"]:
+            send_whatsapp_message(candidate["whatsapp_id"], f"You've been made a leader for {area}. Thank you!")
+        match_and_notify(area)
         return f"Done -- {candidate['name']} is now the leader for {area}."
 
     if not candidate["whatsapp_id"]:
@@ -258,6 +278,7 @@ def _handle_resolve_pending(whatsapp_id, text):
         candidate["whatsapp_id"],
         f"You've been confirmed as the leader for {area}. Thank you for accepting!"
     )
+    match_and_notify(area)
 
     return f"Done -- {name} is now the leader for {area}."
 
