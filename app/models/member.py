@@ -51,6 +51,14 @@ area's Bible study, doesn't necessarily do allocation/reporting):
     "confirmed leader, no specific group yet" (not enough groups
     formed in their area, or allocation hasn't run since they were
     confirmed). See match_leaders_to_groups().
+  - pending_reassignment: set when an already-placed member changes
+    their area (see app/services/area_change.py). Their OLD
+    group_label is deliberately left untouched -- not cleared, not
+    auto-updated -- so the normal top-up run doesn't silently move
+    them; a leader has to act. NULL means no pending reassignment;
+    "" (empty string) means pending but no existing group could be
+    recommended (their new area has no groups yet); any other value
+    is the recommended group_label a leader can approve or override.
 
 Runs on PostgreSQL (see app/database.py). SQL placeholders use %s
 (psycopg2 style), not sqlite3's ?.
@@ -107,6 +115,10 @@ def init_members_table():
     cursor.execute("""
         ALTER TABLE members
         ADD COLUMN IF NOT EXISTS leads_group_label TEXT
+    """)
+    cursor.execute("""
+        ALTER TABLE members
+        ADD COLUMN IF NOT EXISTS pending_reassignment TEXT
     """)
 
     conn.commit()
@@ -459,3 +471,83 @@ def get_confirmed_leaders():
     cursor.close()
     conn.close()
     return rows
+
+
+def update_member_area(whatsapp_id, new_area):
+    """Updates a member's own area (self-service, via update_details). Does NOT touch group_label -- see area_change.py."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE members SET area = %s WHERE whatsapp_id = %s", (new_area, whatsapp_id))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def set_pending_reassignment(reg_number, recommendation):
+    """recommendation is the recommended group_label, or "" if none could be computed (no existing groups in the new area yet)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE members SET pending_reassignment = %s WHERE reg_number = %s",
+        (recommendation, reg_number)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def resolve_reassignment(reg_number, new_group_label):
+    """Applies a leader's decision (approved recommendation, or an override) and clears the pending flag."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE members SET group_label = %s, pending_reassignment = NULL WHERE reg_number = %s",
+        (new_group_label, reg_number)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def get_pending_reassignments():
+    """
+    Returns (reg_number, name, old_group_label, new_area, recommendation)
+    for every member with a pending reassignment, ordered by new area
+    then name -- used to build the leader-facing numbered list.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT reg_number, name, group_label AS old_group_label, area AS new_area, pending_reassignment
+        FROM members WHERE pending_reassignment IS NOT NULL
+        ORDER BY area, name
+    """)
+    rows = [
+        (row["reg_number"], row["name"], row["old_group_label"], row["new_area"], row["pending_reassignment"])
+        for row in cursor.fetchall()
+    ]
+    cursor.close()
+    conn.close()
+    return rows
+
+
+def get_all_leaders():
+    """Every exec/organizational leader (is_leader = TRUE) -- used to broadcast a reassignment recommendation."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM members WHERE is_leader = TRUE")
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
+
+
+def get_leader_of_group(group_label):
+    """Returns the member row leading this specific group_label, or None if unmatched. Used to name a leader in a member-facing notification."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM members WHERE leads_group_label = %s", (group_label,))
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return row

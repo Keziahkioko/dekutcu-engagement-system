@@ -17,14 +17,14 @@ classifier having a good day.
 Design note on scope: several intents below are stubbed -- they
 correctly recognize what the member wants, but the real handler
 (e.g. actually showing upcoming events) belongs to a later stage
-that hasn't been built yet. update_details, unsubscribe_followup, and
-withdraw_data_consent are genuinely handled here since they only need
-the Members table, which already exists. allocate_groups and
-reshuffle_groups (Stage 5) are also genuinely handled -- they trigger
-the allocation engine in app/services/allocation.py in a background
-thread (the ILP solve is too slow to run inside the webhook request --
-see Stage 5 planning notes) and message the leader again once it's
-done.
+that hasn't been built yet. update_details (AREA changes only --
+see below), unsubscribe_followup, and withdraw_data_consent are
+genuinely handled here since they only need the Members table, which
+already exists. allocate_groups and reshuffle_groups (Stage 5) are
+also genuinely handled -- they trigger the allocation engine in
+app/services/allocation.py in a background thread (the ILP solve is
+too slow to run inside the webhook request -- see Stage 5 planning
+notes) and message the leader again once it's done.
 
 Stage 6 adds group-LEADER management: nominate_group_leader,
 view_group_leaders, resolve_pending_leader, and remove_group_leader
@@ -35,6 +35,15 @@ via accept_leader_nomination -- it's a one-shot YES/NO, so it reuses
 the existing pending_actions mechanism rather than needing its own
 multi-step state (see leader_assignment.py's docstring for why that
 split makes sense).
+
+Also adds area-change reassignment: update_details only handles AREA
+changes for real (name/year-of-study still fall through to a "not yet
+supported" message -- they don't carry area's re-grouping
+consequence). Delegates to app/services/area_change.py, which
+deliberately does NOT auto-move an already-placed member into their
+new area's groups -- it computes a recommendation and a leader has to
+act via resolve_reassignments, same non-free-text numbered-list
+pattern used throughout Stage 6.
 """
 
 import os
@@ -58,6 +67,7 @@ from app.services.allocation import allocate_members_topup, allocate_members_ilp
 from app.services.whatsapp_client import send_whatsapp_message
 from app.services.registration import AREAS
 from app.services import leader_assignment
+from app.services import area_change
 
 GROQ_MODEL = "openai/gpt-oss-20b"
 
@@ -88,6 +98,7 @@ INTENT_DEFINITIONS = {
     "view_group_leaders": "A leader wanting to see who the group leaders are -- confirmed, pending, or areas with no leader yet.",
     "resolve_pending_leader": "A leader wanting to manually confirm that a pending group-leader candidate has accepted, e.g. because they agreed in person rather than replying on WhatsApp.",
     "remove_group_leader": "A leader wanting to remove someone as a group leader.",
+    "resolve_reassignments": "A leader wanting to review and act on pending member area-change reassignments.",
     "unclear": "Doesn't confidently match any of the above.",
 }
 
@@ -96,6 +107,7 @@ VALID_INTENTS = set(INTENT_DEFINITIONS.keys())
 LEADER_ONLY_INTENTS = {
     "leadership_query", "send_announcement", "allocate_groups", "reshuffle_groups", "view_groups",
     "nominate_group_leader", "view_group_leaders", "resolve_pending_leader", "remove_group_leader",
+    "resolve_reassignments",
 }
 
 # Guards against two allocation runs (each ~10-15 seconds) overlapping
@@ -353,6 +365,27 @@ def _handle_remove_group_leader(member, text):
     return leader_assignment.start_remove_leader(member["whatsapp_id"])
 
 
+def _handle_resolve_reassignments(member, text):
+    return area_change.start_resolve_reassignment(member["whatsapp_id"])
+
+
+# Only area changes are genuinely handled for update_details right now
+# -- name/year-of-study updates don't have area's re-grouping
+# consequence and weren't part of what was scoped. Keyword-matched the
+# same lightweight way registration.py matches a correction request.
+_AREA_UPDATE_KEYWORDS = ("area", "hostel", "estate", "moved", "location", "residence")
+
+
+def _handle_update_details(member, text):
+    if any(keyword in text.lower() for keyword in _AREA_UPDATE_KEYWORDS):
+        return area_change.start_area_change(member["whatsapp_id"])
+    return (
+        "Right now I can only help you update your area. If that's what you meant, "
+        "try saying something like 'I want to update my area'. For other changes, "
+        "please contact a leader directly."
+    )
+
+
 def _handle_view_group_leaders(member, text):
     confirmed, pending = get_leader_status()
     covered_areas = {area for area, _, _ in confirmed} | {area for area, _ in pending}
@@ -574,7 +607,7 @@ _STUB_HANDLERS = {
     "checkin_response": _handle_stub("Check-in handling"),
     "feedback_response": _handle_stub("Feedback collection"),
     "purchase_study_guide": _handle_stub("Study guide payments"),
-    "update_details": _handle_stub("Updating your details"),
+    "update_details": _handle_update_details,
     "unsubscribe_followup": _handle_unsubscribe_followup,
     "resume_followup": _handle_resume_followup,
     "withdraw_data_consent": _handle_withdraw_data_consent,
@@ -589,5 +622,6 @@ _STUB_HANDLERS = {
     "view_group_leaders": _handle_view_group_leaders,
     "resolve_pending_leader": _handle_resolve_pending_leader,
     "remove_group_leader": _handle_remove_group_leader,
+    "resolve_reassignments": _handle_resolve_reassignments,
     "unclear": _handle_unclear,
 }

@@ -258,6 +258,22 @@ def allocate_members_topup(members):
     return {"updates": updates, "flagged_areas": flagged_areas}
 
 
+def recommend_group_for_member(member, area_members):
+    """
+    Recommends which of `area_members`' EXISTING groups `member`
+    should join -- the same "fewest of their gender, then fewest of
+    their year, then smallest current size" heuristic
+    allocate_members_topup already uses to place brand-new members.
+    Used for area-change reassignment recommendations: the member
+    isn't auto-moved, but this is what a leader gets shown as the
+    suggested group. Returns None if area_members has no existing
+    groups yet, or every existing group is already full.
+    """
+    placed = [m for m in area_members if m["group_label"] is not None]
+    existing_groups = _existing_groups_from_placed(placed)
+    return _best_existing_group(member, existing_groups)
+
+
 def _existing_groups_from_placed(placed):
     """Reconstructs {group_label: [member, ...]} from already-placed members."""
     groups = defaultdict(list)
