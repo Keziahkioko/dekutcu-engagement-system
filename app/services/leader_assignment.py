@@ -201,13 +201,23 @@ def _handle_bypass_choice(whatsapp_id, text, pending):
             "directly instead, or nominate someone else."
         )
 
-    nominate_leader(candidate["reg_number"], area, whatsapp_id)
-    set_pending_action(candidate["whatsapp_id"], "accept_leader_nomination")
-    send_whatsapp_message(
+    # Send BEFORE persisting any pending state -- if the message never
+    # actually reaches the candidate, they shouldn't be left with a
+    # phantom pending nomination/action they were never told about,
+    # and the exec leader shouldn't be falsely told it worked.
+    response = send_whatsapp_message(
         candidate["whatsapp_id"],
         f"You've been asked to lead a Bible Study group in {area}. "
         "Reply YES to accept, or NO to decline."
     )
+    if response.status_code != 200:
+        return (
+            f"Something went wrong sending the confirmation request to {candidate['name']} -- "
+            "please try nominating them again."
+        )
+
+    nominate_leader(candidate["reg_number"], area, whatsapp_id)
+    set_pending_action(candidate["whatsapp_id"], "accept_leader_nomination")
     return f"Message sent to {candidate['name']} -- I'll let you know how they respond."
 
 
