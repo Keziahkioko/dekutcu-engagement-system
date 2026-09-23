@@ -176,3 +176,53 @@ def set_group_labels(updates):
     conn.commit()
     cursor.close()
     conn.close()
+
+
+def count_group_placement_status():
+    """
+    Returns (placed_count, unplaced_count) among data-consenting
+    members -- used to word the allocate_groups confirmation
+    correctly (a first-ever run, where nobody is placed yet, needs
+    different wording from a routine top-up).
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT
+            COUNT(*) FILTER (WHERE group_label IS NOT NULL) AS placed,
+            COUNT(*) FILTER (WHERE group_label IS NULL) AS unplaced
+        FROM members WHERE data_consent = TRUE
+    """)
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return row["placed"], row["unplaced"]
+
+
+def get_group_summary():
+    """
+    Returns (group_counts, unplaced) for the view_groups leader
+    report: group_counts is a list of (group_label, member_count)
+    tuples sorted by label (which sorts groups within the same area
+    together, since labels are "Area #N"); unplaced is how many
+    data-consenting members have no group_label yet.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT group_label, COUNT(*) AS n
+        FROM members
+        WHERE data_consent = TRUE AND group_label IS NOT NULL
+        GROUP BY group_label
+        ORDER BY group_label
+    """)
+    group_counts = [(row["group_label"], row["n"]) for row in cursor.fetchall()]
+
+    cursor.execute(
+        "SELECT COUNT(*) AS n FROM members WHERE data_consent = TRUE AND group_label IS NULL"
+    )
+    unplaced = cursor.fetchone()["n"]
+
+    cursor.close()
+    conn.close()
+    return group_counts, unplaced

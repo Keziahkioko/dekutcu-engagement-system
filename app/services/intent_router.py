@@ -32,7 +32,13 @@ import json
 import threading
 from groq import Groq
 
-from app.models.member import get_member_by_whatsapp_id, get_data_consenting_members, set_group_labels
+from app.models.member import (
+    get_member_by_whatsapp_id,
+    get_data_consenting_members,
+    set_group_labels,
+    count_group_placement_status,
+    get_group_summary,
+)
 from app.models.pending_action import set_pending_action, get_pending_action, clear_pending_action
 from app.database import get_connection
 from app.services.allocation import allocate_members_topup, allocate_members_ilp
@@ -62,12 +68,15 @@ INTENT_DEFINITIONS = {
     "send_announcement": "A leader wanting to broadcast a message to all members.",
     "allocate_groups": "A leader wanting to place new (ungrouped) members into Bible study groups.",
     "reshuffle_groups": "A leader wanting to fully regenerate every group from scratch, discarding existing placements.",
+    "view_groups": "A leader wanting to see a summary of how members have been allocated into Bible study groups.",
     "unclear": "Doesn't confidently match any of the above.",
 }
 
 VALID_INTENTS = set(INTENT_DEFINITIONS.keys())
 
-LEADER_ONLY_INTENTS = {"leadership_query", "send_announcement", "allocate_groups", "reshuffle_groups"}
+LEADER_ONLY_INTENTS = {
+    "leadership_query", "send_announcement", "allocate_groups", "reshuffle_groups", "view_groups"
+}
 
 # Guards against two allocation runs (each ~10-15 seconds) overlapping
 # if a leader triggers this more than once before the first finishes.
@@ -173,12 +182,9 @@ CONFIRMATION_QUESTIONS = {
         "and text STOP instead.\n\n"
         "Reply YES to confirm you want to withdraw completely, or NO to cancel."
     ),
-    "allocate_groups": (
-        "This will place any new (not-yet-grouped) members into Bible study "
-        "groups, without moving anyone who's already placed. It takes about "
-        "10-15 seconds -- I'll message you again once it's done.\n\n"
-        "Reply YES to confirm, or NO to cancel."
-    ),
+    # allocate_groups isn't here -- its wording depends on how many
+    # members are already placed (see _confirmation_text), so it's
+    # computed dynamically rather than fixed like the others.
     "reshuffle_groups": (
         "This will move EVERYONE into new groups, not just new members -- "
         "existing group placements will NOT be preserved. This is a bigger "
@@ -230,13 +236,74 @@ def withdraw_all_consent(whatsapp_id):
 # ---------------------------------------------------------------------
 
 def _handle_allocate_groups(member, text):
+    placed, unplaced = count_group_placement_status()
+    if unplaced == 0:
+        return "Everyone's already been placed into a group -- there's nothing new to allocate right now."
+
     set_pending_action(member["whatsapp_id"], "allocate_groups")
-    return CONFIRMATION_QUESTIONS["allocate_groups"]
+    return _allocate_groups_confirmation_text(placed, unplaced)
+
+
+def _allocate_groups_confirmation_text(placed, unplaced):
+    """
+    Worded differently for a genuine first-ever run (nobody placed
+    yet, so "without moving anyone who's already placed" is confusing
+    boilerplate) versus a routine top-up (some members already placed).
+    """
+    if placed == 0:
+        return (
+            f"This is your first time running allocation -- it'll place all "
+            f"{unplaced} registered member(s) into their first Bible study "
+            "groups. It takes about 10-15 seconds -- I'll message you again "
+            "once it's done.\n\n"
+            "Reply YES to confirm, or NO to cancel."
+        )
+
+    return (
+        f"This will place {unplaced} new member(s) into Bible study groups, "
+        f"without moving the {placed} member(s) already placed. It takes "
+        "about 10-15 seconds -- I'll message you again once it's done.\n\n"
+        "Reply YES to confirm, or NO to cancel."
+    )
+
+
+def _confirmation_text(action):
+    """
+    Returns the confirmation question for `action`. allocate_groups is
+    computed fresh each time (its wording depends on current placement
+    counts); every other action's text is static.
+    """
+    if action == "allocate_groups":
+        placed, unplaced = count_group_placement_status()
+        return _allocate_groups_confirmation_text(placed, unplaced)
+    return CONFIRMATION_QUESTIONS[action]
 
 
 def _handle_reshuffle_groups(member, text):
     set_pending_action(member["whatsapp_id"], "reshuffle_groups")
     return CONFIRMATION_QUESTIONS["reshuffle_groups"]
+
+
+def _handle_view_groups(member, text):
+    """
+    Read-only report -- no confirmation needed, unlike
+    allocate_groups/reshuffle_groups which change data.
+    """
+    group_counts, unplaced = get_group_summary()
+
+    if not group_counts:
+        return "No groups have been formed yet."
+
+    lines = ["Current group allocation:", ""]
+    lines.extend(f"{label}: {count}" for label, count in group_counts)
+    lines.append("")
+
+    total_placed = sum(count for _, count in group_counts)
+    lines.append(f"{len(group_counts)} group(s), {total_placed} member(s) placed.")
+    if unplaced:
+        lines.append(f"{unplaced} member(s) not yet grouped.")
+
+    return "\n".join(lines)
 
 
 def _start_allocation_job(whatsapp_id, action):
@@ -329,7 +396,7 @@ def handle_pending_action_response(whatsapp_id, text):
         # Re-ask rather than silently falling through to the intent
         # router -- a half-confirmed serious action shouldn't be lost
         # to an ambiguous reply.
-        return f"Please reply YES or NO.\n\n{CONFIRMATION_QUESTIONS[action]}"
+        return f"Please reply YES or NO.\n\n{_confirmation_text(action)}"
 
     clear_pending_action(whatsapp_id)
 
@@ -414,5 +481,6 @@ _STUB_HANDLERS = {
     "send_announcement": _handle_stub("Sending announcements"),
     "allocate_groups": _handle_allocate_groups,
     "reshuffle_groups": _handle_reshuffle_groups,
+    "view_groups": _handle_view_groups,
     "unclear": _handle_unclear,
 }
