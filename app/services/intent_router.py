@@ -49,7 +49,6 @@ pattern used throughout Stage 6.
 import os
 import json
 import threading
-from groq import Groq
 
 from app.models.member import (
     get_member_by_whatsapp_id,
@@ -73,8 +72,7 @@ from app.services.registration import AREAS
 from app.services import leader_assignment
 from app.services import area_change
 from app.services.group_query import answer_group_question
-
-GROQ_MODEL = "openai/gpt-oss-20b"
+from app.services.llm_client import create_chat_completion
 
 STOP_KEYWORDS = {"stop", "unsubscribe"}
 RESUME_KEYWORDS = {"resume"}
@@ -175,20 +173,14 @@ def classify_intent(message_text, whatsapp_id=None):
     ambiguous follow-ups that make no sense read in isolation. Purely
     additive context; classification still targets only message_text.
     """
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        return "unclear"
-
     try:
-        client = Groq(api_key=api_key)
         messages = [{"role": "system", "content": _SYSTEM_PROMPT}]
         if whatsapp_id:
             for entry in get_recent_conversation(whatsapp_id):
                 messages.append({"role": entry["role"], "content": entry["message_text"]})
         messages.append({"role": "user", "content": message_text})
 
-        response = client.chat.completions.create(
-            model=GROQ_MODEL,
+        response = create_chat_completion(
             messages=messages,
             response_format={"type": "json_object"},
             temperature=0,

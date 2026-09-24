@@ -31,7 +31,6 @@ OpenAI-style tool calling -- verified directly before building this.
 
 import os
 import json
-from groq import Groq
 
 from app.models.member import (
     get_group_members,
@@ -41,8 +40,7 @@ from app.models.member import (
 )
 from app.models.conversation_history import get_recent_conversation
 from app.services.registration import AREAS
-
-GROQ_MODEL = "openai/gpt-oss-20b"
+from app.services.llm_client import create_chat_completion
 
 _SYSTEM_PROMPT = (
     "You answer a DeKUTCU Bible Study member's question about groups, group "
@@ -297,12 +295,7 @@ def answer_group_question(member, message_text):
     means Internal Hostels") can be understood in context instead of
     read in isolation.
     """
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        return "Sorry, I can't look that up right now."
-
     tools, dispatch = _build_tools_and_dispatch(member)
-    client = Groq(api_key=api_key)
 
     messages = [{"role": "system", "content": _SYSTEM_PROMPT}]
     for entry in get_recent_conversation(member["whatsapp_id"]):
@@ -311,15 +304,20 @@ def answer_group_question(member, message_text):
 
     try:
         for _ in range(_MAX_TOOL_ROUNDS):
-            response = client.chat.completions.create(
-                model=GROQ_MODEL, messages=messages, tools=tools, tool_choice="auto", temperature=0,
+            response = create_chat_completion(
+                messages=messages, tools=tools, tool_choice="auto", temperature=0,
             )
             reply_message = response.choices[0].message
 
             if not reply_message.tool_calls:
                 return reply_message.content or _FALLBACK_MESSAGE
 
-            messages.append(reply_message)
+            # Stored as a plain dict, not the SDK's own message object --
+            # if a later round in this same loop falls back to a
+            # DIFFERENT provider (see llm_client.py), that provider's
+            # client needs to be able to serialize the whole message
+            # list, including this one.
+            messages.append(reply_message.model_dump())
             for call in reply_message.tool_calls:
                 func = dispatch.get(call.function.name)
                 if func is None:

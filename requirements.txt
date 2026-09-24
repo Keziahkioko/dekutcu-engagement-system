@@ -4,4 +4,5 @@ python-dotenv==1.2.2
 requests==2.33.1
 psycopg2-binary
 groq==1.7.0
+openai==2.7.1
 PuLP==3.3.2

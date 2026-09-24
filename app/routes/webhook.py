@@ -14,6 +14,8 @@ What this file does, in plain terms:
 """
 
 import os
+import time
+import threading
 from flask import Blueprint, request, jsonify
 
 from app.models.pending_registration import get_pending_registration, delete_pending_registration
@@ -21,6 +23,11 @@ from app.models.pending_action import get_pending_action
 from app.models.pending_leader_nomination import get_pending_leader_nomination
 from app.models.pending_area_change import get_pending_area_change
 from app.models.pending_reassignment_resolution import get_pending_reassignment_resolution
+from app.models.pending_message import (
+    enqueue_message,
+    claim_next_message,
+    delete_pending_message,
+)
 from app.services.registration import is_registered, start_registration, handle_message
 from app.services.intent_router import (
     is_stop_message,
@@ -37,6 +44,65 @@ webhook_bp = Blueprint("webhook", __name__)
 
 # This is a secret word WE make up ourselves -- not from Meta.
 VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "dekutcu_verify_2026")
+
+# Incoming messages are queued (durably, in the pending_messages
+# table -- see app/models/pending_message.py) and handled by a small
+# pool of background worker threads, instead of being processed inline
+# during the webhook POST. Meta expects a prompt 200 OK on webhook
+# delivery, or it assumes the delivery failed and resends the same
+# payload -- reprocessing it a second time. Classifying intent (Groq)
+# can occasionally take a few retried seconds (see llm_client.py), so
+# answering Meta first and doing the real work after removes that
+# timing pressure entirely.
+#
+# Kept deliberately modest rather than maximized: Groq's own
+# per-minute limit only fits a handful of messages regardless of how
+# many worker threads exist, so a bigger pool wouldn't add real
+# throughput on its own (see PROJECT_LOG.md). Easy to raise later with
+# real usage data -- just this one constant.
+_NUM_WORKERS = 3
+
+# If this many messages are already waiting when a new one arrives,
+# send an instant, non-AI "got it" reply before the real one -- a
+# WhatsApp user seeing nothing for a while reads very differently to
+# a website visitor watching a loading spinner.
+_BACKLOG_FILLER_THRESHOLD = 3
+_FILLER_REPLY = "Got your message! I'm a little busy right now -- give me a moment and I'll get back to you."
+
+
+def _process_queue_shard(shard_index):
+    """
+    Runs forever in one background thread, handling only messages
+    whose sender hashes into this worker's shard -- so any one
+    sender's own messages are always handled by the same worker, in
+    order, never racing each other against shared pending-state rows,
+    while different senders' messages can still process in parallel
+    across the pool.
+
+    The broad except here is deliberate and load-bearing: an unhandled
+    exception killing this thread would silently stop it claiming any
+    more of ITS shard's messages forever (though the other workers'
+    shards would be unaffected) -- a single bad message could never
+    do that under the old per-request model, where each request was
+    independent.
+    """
+    while True:
+        message = claim_next_message(shard_index, _NUM_WORKERS)
+        if message is None:
+            time.sleep(0.5)
+            continue
+        try:
+            reply_text = route_incoming_message(message["sender_number"], message["message_text"])
+            send_whatsapp_message(to_number=message["sender_number"], message_text=reply_text)
+        except Exception as e:
+            print(f"Background message processing failed for {message['sender_number']}: {e}")
+        finally:
+            delete_pending_message(message["id"])
+
+
+def start_message_worker():
+    for shard_index in range(_NUM_WORKERS):
+        threading.Thread(target=_process_queue_shard, args=(shard_index,), daemon=True).start()
 
 
 @webhook_bp.route("/webhook", methods=["GET"])
@@ -78,12 +144,9 @@ def receive_message():
 
         print(f"Message from {sender_number}: {message_text}")
 
-        reply_text = route_incoming_message(sender_number, message_text)
-
-        send_whatsapp_message(
-            to_number=sender_number,
-            message_text=reply_text
-        )
+        backlog_count = enqueue_message(sender_number, message_text)
+        if backlog_count >= _BACKLOG_FILLER_THRESHOLD:
+            send_whatsapp_message(to_number=sender_number, message_text=_FILLER_REPLY)
 
     except (KeyError, IndexError) as e:
         print(f"Could not parse incoming webhook: {e}")

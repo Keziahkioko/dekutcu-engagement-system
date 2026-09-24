@@ -12,7 +12,7 @@ instead of building a Flask app on its own.
 from flask import Flask
 from dotenv import load_dotenv
 
-from app.routes.webhook import webhook_bp
+from app.routes.webhook import webhook_bp, start_message_worker
 from app.models.member import init_members_table
 from app.models.pending_registration import init_pending_registrations_table
 from app.models.pending_action import init_pending_actions_table
@@ -20,6 +20,7 @@ from app.models.pending_leader_nomination import init_pending_leader_nominations
 from app.models.pending_area_change import init_pending_area_changes_table
 from app.models.pending_reassignment_resolution import init_pending_reassignment_resolutions_table
 from app.models.conversation_history import init_conversation_history_table
+from app.models.pending_message import init_pending_messages_table
 
 
 def create_app():
@@ -38,5 +39,8 @@ def create_app():
     init_pending_area_changes_table()
     init_pending_reassignment_resolutions_table()
     init_conversation_history_table()
+    init_pending_messages_table()
+
+    start_message_worker()
 
     return app
