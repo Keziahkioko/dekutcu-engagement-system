@@ -4,6 +4,13 @@ This is Keziah's final-year capstone — an individually defended project, so he
 assistance is fine, but Keziah must be able to explain every piece back. Work
 accordingly:
 
+- **Read `docs/PROJECT_LOG.md` at the start of every session, before doing
+  anything else.** It's the running record of which of the 15 build stages
+  are done/in-progress/not-started, and a log of settled design decisions
+  with brief reasoning — the durable memory for this project across
+  sessions. Whenever a real design decision is settled or a stage is
+  finished, add a short entry to it before moving on to the next thing.
+
 - Go slowly, one step at a time. Do not move to the next step until I've
   confirmed I understand the current one and I'm ready to continue.
 - Before writing any code, explain the design decision and reasoning behind it,
