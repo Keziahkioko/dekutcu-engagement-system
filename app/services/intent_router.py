@@ -68,6 +68,7 @@ from app.services.whatsapp_client import send_whatsapp_message
 from app.services.registration import AREAS
 from app.services import leader_assignment
 from app.services import area_change
+from app.services.group_query import answer_group_question
 
 GROQ_MODEL = "openai/gpt-oss-20b"
 
@@ -94,6 +95,7 @@ INTENT_DEFINITIONS = {
     "allocate_groups": "A leader wanting to place new (ungrouped) members into Bible study groups.",
     "reshuffle_groups": "A leader wanting to fully regenerate every group from scratch, discarding existing placements.",
     "view_groups": "A leader wanting to see a summary of how members have been allocated into Bible study groups.",
+    "group_query": "A question about Bible study groups, group leaders, or group membership -- e.g. which group someone is in, who's in a group, how many groups exist, or who leads a group.",
     "nominate_group_leader": "A leader wanting to nominate or assign someone as a Bible study group leader for an area.",
     "view_group_leaders": "A leader wanting to see who the group leaders are -- confirmed, pending, or areas with no leader yet.",
     "resolve_pending_leader": "A leader wanting to manually confirm that a pending group-leader candidate has accepted, e.g. because they agreed in person rather than replying on WhatsApp.",
@@ -344,6 +346,17 @@ def _handle_view_groups(member, text):
         lines.append(f"{unplaced} member(s) not yet grouped.")
 
     return "\n".join(lines)
+
+
+def _handle_group_query(member, text):
+    """
+    Open-ended, NOT leader-gated -- unlike view_groups (a fixed org-
+    wide report), this answers whatever's actually asked, scoped to
+    what this specific member is allowed to see (own group for
+    everyone, led group for group leaders, org-wide for exec leaders).
+    See app/services/group_query.py.
+    """
+    return answer_group_question(member, text)
 
 
 # ---------------------------------------------------------------------
@@ -618,6 +631,7 @@ _STUB_HANDLERS = {
     "allocate_groups": _handle_allocate_groups,
     "reshuffle_groups": _handle_reshuffle_groups,
     "view_groups": _handle_view_groups,
+    "group_query": _handle_group_query,
     "nominate_group_leader": _handle_nominate_group_leader,
     "view_group_leaders": _handle_view_group_leaders,
     "resolve_pending_leader": _handle_resolve_pending_leader,

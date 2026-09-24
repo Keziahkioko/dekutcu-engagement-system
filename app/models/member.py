@@ -551,3 +551,47 @@ def get_leader_of_group(group_label):
     cursor.close()
     conn.close()
     return row
+
+
+def get_group_members(group_label):
+    """Every member currently in this specific group_label, alphabetical -- the roster for a "who's in my group" style question."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM members WHERE group_label = %s ORDER BY name", (group_label,))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
+
+
+def get_all_groups_with_leaders(area=None):
+    """
+    Returns (group_label, area, member_count, leader_name) for every
+    group, optionally scoped to one area, sorted by area then label.
+    leader_name is None for a group not yet matched to a leader.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    if area:
+        cursor.execute("""
+            SELECT group_label, area, COUNT(*) AS n
+            FROM members WHERE area = %s AND group_label IS NOT NULL
+            GROUP BY group_label, area ORDER BY group_label
+        """, (area,))
+    else:
+        cursor.execute("""
+            SELECT group_label, area, COUNT(*) AS n
+            FROM members WHERE group_label IS NOT NULL
+            GROUP BY group_label, area ORDER BY area, group_label
+        """)
+    groups = cursor.fetchall()
+
+    cursor.execute("SELECT leads_group_label, name FROM members WHERE leads_group_label IS NOT NULL")
+    leaders_by_label = {row["leads_group_label"]: row["name"] for row in cursor.fetchall()}
+
+    cursor.close()
+    conn.close()
+    return [
+        (row["group_label"], row["area"], row["n"], leaders_by_label.get(row["group_label"]))
+        for row in groups
+    ]

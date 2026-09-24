@@ -240,6 +240,7 @@ def _group_options_text(member_name, new_area, recommendation):
 
 def _handle_choosing_group(whatsapp_id, text, pending):
     member = get_member_by_reg_number(pending["member_reg_number"])
+    old_group_label = member["group_label"]
     groups = _existing_groups_in_area(member["area"])
 
     if not text.isdigit() or not (1 <= int(text) <= len(groups)):
@@ -249,12 +250,23 @@ def _handle_choosing_group(whatsapp_id, text, pending):
     delete_pending_reassignment_resolution(whatsapp_id)
     resolve_reassignment(member["reg_number"], chosen_label)
 
+    new_leader = get_leader_of_group(chosen_label)
+    new_group_description = f"{chosen_label}, led by {new_leader['name']}" if new_leader else f"{chosen_label} (no leader matched yet)"
+
     if member["whatsapp_id"]:
-        leader = get_leader_of_group(chosen_label)
-        leader_note = f", led by {leader['name']}" if leader else ""
+        send_whatsapp_message(member["whatsapp_id"], f"You've been moved to {new_group_description}.")
+
+    # Tell the OLD group's leader their roster just shrank -- they'd
+    # otherwise have no way to know. Skip if the old and new leader are
+    # literally the same person (e.g. a cross-area leader) -- "your
+    # member left your group to join your group" would just be confusing.
+    old_leader = get_leader_of_group(old_group_label) if old_group_label else None
+    same_leader = old_leader and new_leader and old_leader["reg_number"] == new_leader["reg_number"]
+    if old_leader and old_leader["whatsapp_id"] and not same_leader:
         send_whatsapp_message(
-            member["whatsapp_id"],
-            f"You've been moved to {chosen_label}{leader_note}."
+            old_leader["whatsapp_id"],
+            f"{member['name']} has moved to a new area and will no longer be part of your group "
+            f"({old_group_label}). Their new group is {new_group_description}."
         )
 
     return f"Done -- {member['name']} is now in {chosen_label}."
