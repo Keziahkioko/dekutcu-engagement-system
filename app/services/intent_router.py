@@ -56,7 +56,6 @@ from app.models.member import (
     get_data_consenting_members,
     set_group_labels,
     count_group_placement_status,
-    get_group_summary,
     confirm_leader_nomination,
     decline_leader_nomination,
     get_leader_status,
@@ -94,8 +93,7 @@ INTENT_DEFINITIONS = {
     "send_announcement": "A leader wanting to broadcast a message to all members.",
     "allocate_groups": "A leader wanting to place new (ungrouped) members into Bible study groups.",
     "reshuffle_groups": "A leader wanting to fully regenerate every group from scratch, discarding existing placements.",
-    "view_groups": "A leader wanting to see a summary of how members have been allocated into Bible study groups.",
-    "group_query": "A question about Bible study groups, group leaders, or group membership -- e.g. which group someone is in, who's in a group, how many groups exist, or who leads a group.",
+    "group_query": "A question about Bible study groups, group leaders, or group membership -- e.g. which group someone is in, who's in a group, how many groups exist, a summary of how allocation went, or who leads a group.",
     "nominate_group_leader": "A leader wanting to nominate or assign someone as a Bible study group leader for an area.",
     "view_group_leaders": "A leader wanting to see who the group leaders are -- confirmed, pending, or areas with no leader yet.",
     "resolve_pending_leader": "A leader wanting to manually confirm that a pending group-leader candidate has accepted, e.g. because they agreed in person rather than replying on WhatsApp.",
@@ -107,7 +105,7 @@ INTENT_DEFINITIONS = {
 VALID_INTENTS = set(INTENT_DEFINITIONS.keys())
 
 LEADER_ONLY_INTENTS = {
-    "leadership_query", "send_announcement", "allocate_groups", "reshuffle_groups", "view_groups",
+    "leadership_query", "send_announcement", "allocate_groups", "reshuffle_groups",
     "nominate_group_leader", "view_group_leaders", "resolve_pending_leader", "remove_group_leader",
     "resolve_reassignments",
 }
@@ -326,35 +324,18 @@ def _handle_reshuffle_groups(member, text):
     return CONFIRMATION_QUESTIONS["reshuffle_groups"]
 
 
-def _handle_view_groups(member, text):
-    """
-    Read-only report -- no confirmation needed, unlike
-    allocate_groups/reshuffle_groups which change data.
-    """
-    group_counts, unplaced = get_group_summary()
-
-    if not group_counts:
-        return "No groups have been formed yet."
-
-    lines = ["Current group allocation:", ""]
-    lines.extend(f"{label}: {count}" for label, count in group_counts)
-    lines.append("")
-
-    total_placed = sum(count for _, count in group_counts)
-    lines.append(f"{len(group_counts)} group(s), {total_placed} member(s) placed.")
-    if unplaced:
-        lines.append(f"{unplaced} member(s) not yet grouped.")
-
-    return "\n".join(lines)
-
-
 def _handle_group_query(member, text):
     """
-    Open-ended, NOT leader-gated -- unlike view_groups (a fixed org-
-    wide report), this answers whatever's actually asked, scoped to
-    what this specific member is allowed to see (own group for
-    everyone, led group for group leaders, org-wide for exec leaders).
-    See app/services/group_query.py.
+    Open-ended, NOT leader-gated -- answers whatever's actually asked,
+    scoped to what this specific member is allowed to see (own group
+    for everyone, led group for group leaders, org-wide for exec
+    leaders). Replaced the older fixed view_groups report entirely
+    (its exact behavior is still reachable here via the list_groups
+    tool) once that older intent started competing with this one for
+    the same phrasings and losing detail in the process -- e.g. "list
+    every group with its members" used to sometimes land on
+    view_groups's counts-only summary instead of this, which could
+    actually answer with real names. See app/services/group_query.py.
     """
     return answer_group_question(member, text)
 
@@ -630,7 +611,6 @@ _STUB_HANDLERS = {
     "send_announcement": _handle_stub("Sending announcements"),
     "allocate_groups": _handle_allocate_groups,
     "reshuffle_groups": _handle_reshuffle_groups,
-    "view_groups": _handle_view_groups,
     "group_query": _handle_group_query,
     "nominate_group_leader": _handle_nominate_group_leader,
     "view_group_leaders": _handle_view_group_leaders,

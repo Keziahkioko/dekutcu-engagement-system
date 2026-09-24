@@ -247,35 +247,6 @@ def count_group_placement_status():
     return row["placed"], row["unplaced"]
 
 
-def get_group_summary():
-    """
-    Returns (group_counts, unplaced) for the view_groups leader
-    report: group_counts is a list of (group_label, member_count)
-    tuples sorted by label (which sorts groups within the same area
-    together, since labels are "Area #N"); unplaced is how many
-    data-consenting members have no group_label yet.
-    """
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT group_label, COUNT(*) AS n
-        FROM members
-        WHERE data_consent = TRUE AND group_label IS NOT NULL
-        GROUP BY group_label
-        ORDER BY group_label
-    """)
-    group_counts = [(row["group_label"], row["n"]) for row in cursor.fetchall()]
-
-    cursor.execute(
-        "SELECT COUNT(*) AS n FROM members WHERE data_consent = TRUE AND group_label IS NULL"
-    )
-    unplaced = cursor.fetchone()["n"]
-
-    cursor.close()
-    conn.close()
-    return group_counts, unplaced
-
-
 def get_members_by_area(area):
     """Registered (data-consenting) members in one area, alphabetical -- used to build a candidate list."""
     conn = get_connection()
@@ -569,15 +540,20 @@ def get_all_groups_with_leaders(area=None):
     Returns (group_label, area, member_count, leader_name) for every
     group, optionally scoped to one area, sorted by area then label.
     leader_name is None for a group not yet matched to a leader.
+
+    `area` matching is case-insensitive and substring-based (e.g.
+    "bomas", "BOMAS", or "internal" for "Internal Hostels" all match)
+    -- callers (the LLM in group_query.py) can't be relied on to pass
+    the exact stored casing/spelling every time.
     """
     conn = get_connection()
     cursor = conn.cursor()
     if area:
         cursor.execute("""
             SELECT group_label, area, COUNT(*) AS n
-            FROM members WHERE area = %s AND group_label IS NOT NULL
+            FROM members WHERE LOWER(area) LIKE LOWER(%s) AND group_label IS NOT NULL
             GROUP BY group_label, area ORDER BY group_label
-        """, (area,))
+        """, (f"%{area}%",))
     else:
         cursor.execute("""
             SELECT group_label, area, COUNT(*) AS n
@@ -595,3 +571,43 @@ def get_all_groups_with_leaders(area=None):
         (row["group_label"], row["area"], row["n"], leaders_by_label.get(row["group_label"]))
         for row in groups
     ]
+
+
+def find_groups(identifier):
+    """
+    Resolves a loose identifier to matching group_label(s) -- for
+    "give me details on the Nyaribo group" style questions, where the
+    asker doesn't know (or shouldn't need to know) the exact "Area #N"
+    label. Tries, in order:
+      1. An exact group_label match (case-insensitive) -- e.g. "bomas #2".
+      2. Failing that, an area name match (case-insensitive substring,
+         e.g. "internal" for "Internal Hostels") -- returns every
+         group in that area, since there may be more than one.
+    Returns a list of group_labels: empty if nothing matched at all,
+    one if resolved to a single group either way, more than one if the
+    identifier matched an area with multiple groups (caller decides
+    how to handle the ambiguity).
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT DISTINCT group_label FROM members WHERE LOWER(group_label) = LOWER(%s)",
+        (identifier,)
+    )
+    row = cursor.fetchone()
+    if row:
+        cursor.close()
+        conn.close()
+        return [row["group_label"]]
+
+    cursor.execute("""
+        SELECT DISTINCT group_label FROM members
+        WHERE group_label IS NOT NULL AND LOWER(area) LIKE LOWER(%s)
+        ORDER BY group_label
+    """, (f"%{identifier}%",))
+    labels = [r["group_label"] for r in cursor.fetchall()]
+
+    cursor.close()
+    conn.close()
+    return labels

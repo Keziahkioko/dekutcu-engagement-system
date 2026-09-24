@@ -37,7 +37,9 @@ from app.models.member import (
     get_group_members,
     get_leader_of_group,
     get_all_groups_with_leaders,
+    find_groups,
 )
+from app.services.registration import AREAS
 
 GROQ_MODEL = "openai/gpt-oss-20b"
 
@@ -49,7 +51,17 @@ _SYSTEM_PROMPT = (
     "answer. Keep replies short and conversational, suitable for WhatsApp. "
     "WhatsApp does NOT render markdown tables, headers, or links -- for lists, "
     "use plain lines (one item per line, a dash or number prefix is fine) "
-    "instead of a table. *Text between single asterisks* IS supported for bold."
+    "instead of a table. *Text between single asterisks* IS supported for bold.\n\n"
+    "The only valid residence areas are: " + ", ".join(AREAS) + ". If the "
+    "member names an area loosely or misspells it (e.g. 'internal' or "
+    "'nyaribo'), match it to the closest one of these before calling a tool "
+    "-- don't pass their literal wording through unchanged.\n\n"
+    "If asked whether the asking member IS a leader (or which group they "
+    "lead): that's a completely different question from who leads the group "
+    "they BELONG to. If a get_my_led_group tool is available to you at all, "
+    "the answer is yes -- call it. If it is NOT available to you, the answer "
+    "is no, they don't lead anything -- say so directly, don't guess based on "
+    "get_my_group's leader field, which is about someone else's group entirely."
 )
 
 _MAX_TOOL_ROUNDS = 3
@@ -63,7 +75,10 @@ def _tool_get_my_group(member):
     return {
         "placed": True,
         "group": member["group_label"],
-        "leader": leader["name"] if leader else None,
+        # Deliberately NOT called "leader" -- that reads as "is the
+        # asking member A leader", which this has nothing to do with.
+        # This is who leads the group THEY BELONG TO as a participant.
+        "leader_of_this_group": leader["name"] if leader else None,
         "members": [m["name"] for m in roster],
     }
 
@@ -89,10 +104,30 @@ def _tool_list_groups(area=None):
     }
 
 
-def _tool_get_group_roster(group_label):
+def _tool_get_group_roster(identifier):
+    """
+    `identifier` can be an exact group label ("Bomas #2") OR just an
+    area name ("Nyaribo", "the Nyaribo group") -- find_groups()
+    resolves either. If the area has more than one group, this can't
+    guess which one was meant, so it returns the list of options
+    instead of a roster; the model should ask which one, or use
+    list_groups to show them.
+    """
+    matches = find_groups(identifier)
+
+    if not matches:
+        return {"found": False, "message": f"No group or area matching '{identifier}' was found."}
+
+    if len(matches) > 1:
+        return {
+            "found": False,
+            "ambiguous": True,
+            "matching_groups": matches,
+            "message": f"'{identifier}' matches more than one group -- ask which one, or call again with the exact group label.",
+        }
+
+    group_label = matches[0]
     roster = get_group_members(group_label)
-    if not roster:
-        return {"found": False, "message": f"No group called '{group_label}' was found."}
     leader = get_leader_of_group(group_label)
     return {
         "found": True,
@@ -113,7 +148,12 @@ def _build_tools_and_dispatch(member):
         "type": "function",
         "function": {
             "name": "get_my_group",
-            "description": "Get the asking member's own group, its leader, and who else is in it.",
+            "description": (
+                "Get the group the asking member BELONGS TO as a participant, who "
+                "leads that group, and who else is in it. Does NOT tell you whether "
+                "the asking member themselves is a leader of anything -- for that, "
+                "use get_my_led_group if it's available."
+            ),
             "parameters": {"type": "object", "properties": {}},
         },
     }]
@@ -124,7 +164,11 @@ def _build_tools_and_dispatch(member):
             "type": "function",
             "function": {
                 "name": "get_my_led_group",
-                "description": "Get the roster of the specific group the asking member leads.",
+                "description": (
+                    "Get the specific group the asking member THEMSELVES leads, and "
+                    "its roster. This tool being available at all means the answer to "
+                    "'am I a leader?' is yes -- call it to find out which group."
+                ),
                 "parameters": {"type": "object", "properties": {}},
             },
         })
@@ -148,15 +192,20 @@ def _build_tools_and_dispatch(member):
             "type": "function",
             "function": {
                 "name": "get_group_roster",
-                "description": "Get the full member roster and leader for one specific group, by its exact label (e.g. 'Bomas #2').",
+                "description": (
+                    "Get the full member roster and leader for one specific group. "
+                    "Accepts either an exact group label ('Bomas #2') or just an area "
+                    "name ('Nyaribo') if that area only has one group -- no need to "
+                    "know the exact numbering."
+                ),
                 "parameters": {
                     "type": "object",
-                    "properties": {"group_label": {"type": "string"}},
-                    "required": ["group_label"],
+                    "properties": {"identifier": {"type": "string"}},
+                    "required": ["identifier"],
                 },
             },
         })
-        dispatch["get_group_roster"] = lambda **kw: _tool_get_group_roster(kw["group_label"])
+        dispatch["get_group_roster"] = lambda **kw: _tool_get_group_roster(kw["identifier"])
 
     return tools, dispatch
 
