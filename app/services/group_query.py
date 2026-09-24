@@ -39,6 +39,7 @@ from app.models.member import (
     get_all_groups_with_leaders,
     find_groups,
 )
+from app.models.conversation_history import get_recent_conversation
 from app.services.registration import AREAS
 
 GROQ_MODEL = "openai/gpt-oss-20b"
@@ -215,6 +216,11 @@ def answer_group_question(member, message_text):
     Answers a read-only question about groups/leaders/membership,
     using tool-calling scoped to what `member` is allowed to see.
     Falls back to a plain apology on any error -- never guesses.
+
+    Prepends recent conversation history (see conversation_history.py)
+    ahead of the current question, so a short follow-up ("Internal
+    means Internal Hostels") can be understood in context instead of
+    read in isolation.
     """
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
@@ -223,10 +229,10 @@ def answer_group_question(member, message_text):
     tools, dispatch = _build_tools_and_dispatch(member)
     client = Groq(api_key=api_key)
 
-    messages = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": message_text},
-    ]
+    messages = [{"role": "system", "content": _SYSTEM_PROMPT}]
+    for entry in get_recent_conversation(member["whatsapp_id"]):
+        messages.append({"role": entry["role"], "content": entry["message_text"]})
+    messages.append({"role": "user", "content": message_text})
 
     try:
         for _ in range(_MAX_TOOL_ROUNDS):

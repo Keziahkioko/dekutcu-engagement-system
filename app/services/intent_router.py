@@ -61,6 +61,11 @@ from app.models.member import (
     get_leader_status,
 )
 from app.models.pending_action import set_pending_action, get_pending_action, clear_pending_action
+from app.models.conversation_history import (
+    get_recent_conversation,
+    log_conversation_message,
+    clear_conversation_history,
+)
 from app.database import get_connection
 from app.services.allocation import allocate_members_topup, allocate_members_ilp
 from app.services.whatsapp_client import send_whatsapp_message
@@ -119,6 +124,10 @@ def _build_system_prompt():
     lines = [
         "You classify an incoming WhatsApp message into exactly one intent label.",
         "Respond with ONLY a JSON object of the form {\"intent\": \"<label>\"}.",
+        "Any earlier messages shown to you are recent conversation history, given "
+        "only as CONTEXT to help you understand a short or ambiguous follow-up "
+        "(e.g. a one-word reply, or 'then what am I') -- classify ONLY the final, "
+        "most recent user message, never an earlier one.",
         "Choose the single best-fitting label from this list:",
         "",
     ]
@@ -142,11 +151,16 @@ def is_resume_message(text):
     return text.strip().lower() in RESUME_KEYWORDS
 
 
-def classify_intent(message_text):
+def classify_intent(message_text, whatsapp_id=None):
     """
     Calls Groq to classify the message into one of the intents in
     INTENT_DEFINITIONS. Falls back to "unclear" on any API error or
     unparseable/invalid response.
+
+    If whatsapp_id is given, recent conversation history is prepended
+    as context (see conversation_history.py) -- resolves short/
+    ambiguous follow-ups that make no sense read in isolation. Purely
+    additive context; classification still targets only message_text.
     """
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
@@ -154,12 +168,15 @@ def classify_intent(message_text):
 
     try:
         client = Groq(api_key=api_key)
+        messages = [{"role": "system", "content": _SYSTEM_PROMPT}]
+        if whatsapp_id:
+            for entry in get_recent_conversation(whatsapp_id):
+                messages.append({"role": entry["role"], "content": entry["message_text"]})
+        messages.append({"role": "user", "content": message_text})
+
         response = client.chat.completions.create(
             model=GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": message_text},
-            ],
+            messages=messages,
             response_format={"type": "json_object"},
             temperature=0,
         )
@@ -249,6 +266,8 @@ def withdraw_all_consent(whatsapp_id):
     ever touches followup_consent. Also clears group_label: a
     withdrawn member shouldn't keep "occupying" a slot the allocation
     engine thinks is taken, so a future run can offer it to someone else.
+    Also purges conversation_history -- withdrawing consent should mean
+    no trace of past exchanges is kept, not just the structured fields.
     """
     conn = get_connection()
     cursor = conn.cursor()
@@ -259,6 +278,7 @@ def withdraw_all_consent(whatsapp_id):
     conn.commit()
     cursor.close()
     conn.close()
+    clear_conversation_history(whatsapp_id)
 
 
 # ---------------------------------------------------------------------
@@ -564,9 +584,16 @@ def handle_message(whatsapp_id, message_text):
     Note: STOP/RESUME are checked globally in webhook.py, before even
     the registered/pending-registration checks -- by the time a
     message reaches this function, it's already known not to be one.
+
+    Logs this exchange to conversation_history AFTER handling it, not
+    before -- so classify_intent/group_query's own history fetch for
+    THIS call never includes the message currently being processed.
+    Deliberately scoped to just this general chat path -- registration,
+    pending-action confirmations, leader nomination, and area-change
+    flows have their own dedicated step-tracking and don't need this.
     """
     member = get_member_by_whatsapp_id(whatsapp_id)
-    intent = classify_intent(message_text)
+    intent = classify_intent(message_text, whatsapp_id)
 
     if intent in LEADER_ONLY_INTENTS and not member["is_leader"]:
         # Don't confirm the feature exists to a non-leader -- just
@@ -574,7 +601,12 @@ def handle_message(whatsapp_id, message_text):
         intent = "unclear"
 
     handler = _STUB_HANDLERS.get(intent, _handle_unclear)
-    return handler(member, message_text)
+    reply = handler(member, message_text)
+
+    log_conversation_message(whatsapp_id, "user", message_text)
+    log_conversation_message(whatsapp_id, "assistant", reply)
+
+    return reply
 
 
 # ---------------------------------------------------------------------

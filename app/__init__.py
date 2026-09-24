@@ -19,6 +19,7 @@ from app.models.pending_action import init_pending_actions_table
 from app.models.pending_leader_nomination import init_pending_leader_nominations_table
 from app.models.pending_area_change import init_pending_area_changes_table
 from app.models.pending_reassignment_resolution import init_pending_reassignment_resolutions_table
+from app.models.conversation_history import init_conversation_history_table
 
 
 def create_app():
@@ -36,5 +37,6 @@ def create_app():
     init_pending_leader_nominations_table()
     init_pending_area_changes_table()
     init_pending_reassignment_resolutions_table()
+    init_conversation_history_table()
 
     return app
