@@ -47,9 +47,8 @@ GROQ_MODEL = "openai/gpt-oss-20b"
 _SYSTEM_PROMPT = (
     "You answer a DeKUTCU Bible Study member's question about groups, group "
     "leaders, or group membership, using ONLY the tools provided -- never guess "
-    "or make up group names, leader names, or member names. If a tool returns "
-    "nothing useful for the question, say so plainly rather than inventing an "
-    "answer. Keep replies short and conversational, suitable for WhatsApp. "
+    "or make up group names, leader names, or member names. Keep replies short "
+    "and conversational, suitable for WhatsApp. "
     "WhatsApp does NOT render markdown tables, headers, or links -- for lists, "
     "use plain lines (one item per line, a dash or number prefix is fine) "
     "instead of a table. *Text between single asterisks* IS supported for bold.\n\n"
@@ -62,10 +61,35 @@ _SYSTEM_PROMPT = (
     "they BELONG to. If a get_my_led_group tool is available to you at all, "
     "the answer is yes -- call it. If it is NOT available to you, the answer "
     "is no, they don't lead anything -- say so directly, don't guess based on "
-    "get_my_group's leader field, which is about someone else's group entirely."
+    "get_my_group's leader field, which is about someone else's group entirely.\n\n"
+    "MULTIPLE-GROUP AREAS -- follow this carefully, it's the most common "
+    "source of mistakes. Several areas have more than one group. When a "
+    "request is about an AREA rather than one specific numbered group:\n"
+    "- Want a SUMMARY (sizes, leaders, 'how many', 'tell me about the groups "
+    "in X') -> use list_groups for that area.\n"
+    "- Specifically want MEMBER NAMES across the whole area ('names of "
+    "everyone', 'all members of all groups in X') -> use get_area_rosters, "
+    "NOT several separate get_group_roster calls.\n"
+    "- get_group_roster comes back ambiguous (matches more than one group) "
+    "and the wording didn't make clear which ONE was wanted -> ask which "
+    "specific group. But if the wording already implies the whole area "
+    "('the groups', 'all of them', a plural), don't ask -- go straight to "
+    "list_groups or get_area_rosters per the two rules above.\n"
+    "- You already asked 'which group?' and they reply 'all of them' / 'all' "
+    "/ 'every group' -> that means the whole area, not one group. Use "
+    "list_groups or get_area_rosters (whichever fits what they originally "
+    "asked for -- summary vs. names) for the area you were just discussing.\n\n"
+    "Never just say you couldn't find an answer without first trying a "
+    "different tool, or asking one direct clarifying question -- only give up "
+    "if the area or group genuinely doesn't exist at all."
 )
 
-_MAX_TOOL_ROUNDS = 3
+_FALLBACK_MESSAGE = (
+    "I'm not sure how to answer that -- could you rephrase, or ask about one "
+    "specific group or area?"
+)
+
+_MAX_TOOL_ROUNDS = 4
 
 
 def _tool_get_my_group(member):
@@ -124,7 +148,12 @@ def _tool_get_group_roster(identifier):
             "found": False,
             "ambiguous": True,
             "matching_groups": matches,
-            "message": f"'{identifier}' matches more than one group -- ask which one, or call again with the exact group label.",
+            "message": (
+                f"'{identifier}' matches more than one group: {', '.join(matches)}. "
+                "Either ask the member which specific one they meant, or -- if the "
+                "original request implied the whole area rather than one group -- "
+                "use list_groups or get_area_rosters for this area instead."
+            ),
         }
 
     group_label = matches[0]
@@ -135,6 +164,31 @@ def _tool_get_group_roster(identifier):
         "group": group_label,
         "leader": leader["name"] if leader else None,
         "members": [m["name"] for m in roster],
+    }
+
+
+def _tool_get_area_rosters(area):
+    """
+    Every group in `area`, each with its FULL member roster -- for
+    "names of everyone in every group in Bomas" style requests, so the
+    model has one reliable tool instead of having to improvise
+    chaining several get_group_roster calls itself.
+    """
+    groups = get_all_groups_with_leaders(area)
+    if not groups:
+        return {"found": False, "message": f"No groups found for '{area}'."}
+
+    return {
+        "found": True,
+        "area": area,
+        "groups": [
+            {
+                "group": label,
+                "leader": leader,
+                "members": [m["name"] for m in get_group_members(label)],
+            }
+            for label, group_area, count, leader in groups
+        ],
     }
 
 
@@ -208,6 +262,27 @@ def _build_tools_and_dispatch(member):
         })
         dispatch["get_group_roster"] = lambda **kw: _tool_get_group_roster(kw["identifier"])
 
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": "get_area_rosters",
+                "description": (
+                    "Get EVERY group in an area, each with its full member roster in "
+                    "one call. Use specifically when member NAMES are wanted across "
+                    "multiple/all groups in an area (e.g. 'names of everyone in every "
+                    "group in Bomas', or 'all of them' in reply to a 'which group?' "
+                    "question that was about members). For just sizes/leaders with no "
+                    "names, use list_groups instead -- it's shorter and usually enough."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"area": {"type": "string"}},
+                    "required": ["area"],
+                },
+            },
+        })
+        dispatch["get_area_rosters"] = lambda **kw: _tool_get_area_rosters(kw["area"])
+
     return tools, dispatch
 
 
@@ -242,7 +317,7 @@ def answer_group_question(member, message_text):
             reply_message = response.choices[0].message
 
             if not reply_message.tool_calls:
-                return reply_message.content or "Sorry, I couldn't find an answer to that."
+                return reply_message.content or _FALLBACK_MESSAGE
 
             messages.append(reply_message)
             for call in reply_message.tool_calls:
@@ -258,7 +333,7 @@ def answer_group_question(member, message_text):
                     "content": json.dumps(result),
                 })
 
-        return "Sorry, I couldn't find an answer to that."
+        return _FALLBACK_MESSAGE
 
     except Exception as e:
         print(f"group_query failed, falling back: {e}")

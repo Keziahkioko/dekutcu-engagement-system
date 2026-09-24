@@ -83,7 +83,7 @@ RESUME_KEYWORDS = {"resume"}
 # label means. Keep these short and behavior-focused.
 INTENT_DEFINITIONS = {
     "greeting_smalltalk": "Casual greeting, small talk, thanks, or chit-chat with no specific request.",
-    "general_question": "A question about the organization, its beliefs, or its activities.",
+    "general_question": "A general question about the organization, its beliefs, or its activities -- NOT about specific Bible study groups, group leaders, or group membership. Even a short follow-up like 'what about X' or 'and Y?' belongs to group_query instead if the conversation was just discussing groups/leaders/membership -- don't default here just because the message doesn't say the word 'group'.",
     "event_rsvp": "Asking about upcoming events, or responding to/RSVPing for one.",
     "checkin_response": "Explaining or giving a reason for missing a session or event.",
     "feedback_response": "Giving feedback, a rating, or comments about a past event.",
@@ -128,6 +128,19 @@ def _build_system_prompt():
         "only as CONTEXT to help you understand a short or ambiguous follow-up "
         "(e.g. a one-word reply, or 'then what am I') -- classify ONLY the final, "
         "most recent user message, never an earlier one.",
+        "If the most recent assistant message was answering a group_query-type "
+        "question (about groups, group leaders, or group membership) and the new "
+        "message is a short or vague continuation of that same topic (e.g. 'what "
+        "about X', 'and Y?', 'all of them', 'what of the members'), classify it as "
+        "group_query too, even if it doesn't explicitly mention 'group' -- don't "
+        "let it fall through to general_question or unclear. This applies EVEN "
+        "WHEN X is something that could also be read as a standalone topic on its "
+        "own (e.g. if the history was just discussing the Nyaribo Bible study "
+        "group and the new message is 'what about internal hostels' or 'what "
+        "about Gate A', that means the Bible study group(s) in that area too -- "
+        "group_query -- NOT a general question about hostels or campus areas in "
+        "general). The conversation history is the deciding factor, not whether "
+        "the new message reads fine in isolation.",
         "Choose the single best-fitting label from this list:",
         "",
     ]
