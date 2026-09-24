@@ -30,7 +30,21 @@ _MAX_RETRIES = 2
 _BASE_DELAY_SECONDS = 0.5
 
 GROQ_MODEL = "openai/gpt-oss-20b"
-CEREBRAS_MODEL = "llama3.3-70b"
+# Same model family as GROQ_MODEL (just a larger variant) -- picked
+# deliberately over Cerebras's other listed option (qwen-3.8-27b)
+# since our prompts were tuned against gpt-oss's specific behavior;
+# a same-family fallback is the safer bet for staying consistent.
+#
+# KNOWN ISSUE (2026-09-24): confirmed via a live models.list() call
+# that this model NAME is correct -- Cerebras's own docs/search
+# results at the time referenced llama3.3-70b, which 404'd. But a
+# real chat.completions.create() call against it (and against
+# qwen-3.8-27b) both returned 402 Payment Required on the account
+# this was tested with. Check the Cerebras dashboard's billing tab --
+# this fallback will not actually work until that's resolved, though
+# it fails safely (falls through to the caller's existing "unclear"/
+# apology handling) rather than crashing anything.
+CEREBRAS_MODEL = "gpt-oss-120b"
 CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1"
 
 _RATE_LIMIT_ERRORS = (GroqRateLimitError, OpenAIRateLimitError)
