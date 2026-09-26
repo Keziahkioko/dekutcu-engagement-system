@@ -26,8 +26,9 @@ from app.models.pending_reason_capture import (
     start_pending_reason_capture,
     delete_pending_reason_capture,
 )
-from app.models.absence import record_reason
+from app.models.absence import record_reason, get_absence_by_id
 from app.services.llm_client import create_chat_completion
+from app.services import bandit
 
 _REASON_CATEGORIES = [
     "scheduling_conflict", "health", "personal_difficulty",
@@ -86,13 +87,30 @@ def classify_reason(text):
         return "unclassified", False
 
 
+def _select_strategy_message(absence_id, reason_category):
+    """
+    Stage 8 hook: once a reason is on record, the bandit picks a
+    follow-up strategy and this returns the message for it. Only
+    called for the NON-distress path -- a distress reply already gets
+    its own, more important response pointing to a human leader, and
+    shouldn't also be treated as ordinary bandit-training fodder mixed
+    in with routine re-engagement optimization.
+    """
+    absence = get_absence_by_id(absence_id)
+    return bandit.select_arm_for_absence(
+        absence_id, absence["reg_number"], absence["activity_type"],
+        absence["activity_date"], reason_category,
+    )
+
+
 def classify_and_record(absence_id, text):
     """
     Classifies raw text and records it against the given absence,
-    returning the reply to send -- the routine ack, or the distress
-    safety-net reply. Shared by the interactive (pending_reason_capture)
-    reply path and the fellowship slice's "already explained themselves
-    unprompted, in the same message" path.
+    returning the reply to send -- the routine ack (plus a bandit
+    -selected follow-up strategy), or the distress safety-net reply.
+    Shared by the interactive (pending_reason_capture) reply path and
+    the fellowship slice's "already explained themselves unprompted,
+    in the same message" path.
     """
     category, shows_distress = classify_reason(text)
     record_reason(absence_id, text, category, shows_distress)
@@ -103,7 +121,9 @@ def classify_and_record(absence_id, text):
             "Please don't hesitate to reach out to one of your leaders directly -- they "
             "genuinely want to support you."
         )
-    return "Thanks for sharing -- we appreciate you letting us know."
+
+    strategy_message = _select_strategy_message(absence_id, category)
+    return f"Thanks for sharing -- we appreciate you letting us know.\n\n{strategy_message}"
 
 
 def handle_reason_capture_message(whatsapp_id, message_text):
@@ -116,6 +136,7 @@ def handle_reason_capture_message(whatsapp_id, message_text):
 
     if text.lower() == "skip":
         record_reason(pending["absence_id"], None, "unclassified", False)
-        return "No problem -- thanks for letting us know either way."
+        strategy_message = _select_strategy_message(pending["absence_id"], "unclassified")
+        return f"No problem -- thanks for letting us know either way.\n\n{strategy_message}"
 
     return classify_and_record(pending["absence_id"], text)

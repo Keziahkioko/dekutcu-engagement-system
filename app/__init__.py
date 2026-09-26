@@ -33,9 +33,11 @@ from app.models.absence import init_absences_table
 from app.models.pending_reason_capture import init_pending_reason_capture_table
 from app.models.fellowship_checkin import init_fellowship_checkins_table
 from app.models.pending_fellowship_checkin import init_pending_fellowship_checkin_table
+from app.models.bandit_posterior import init_bandit_posteriors_table
 from app.services.scheduler import start_scheduler, register_task
 from app.services.attendance import send_bible_study_nudges
 from app.services.fellowship_checkin import send_fellowship_checkin, process_stale_checkins, TRACKED_WEEKDAYS
+from app.services.bandit import compute_pending_rewards
 
 
 def create_app():
@@ -65,6 +67,7 @@ def create_app():
     init_pending_reason_capture_table()
     init_fellowship_checkins_table()
     init_pending_fellowship_checkin_table()
+    init_bandit_posteriors_table()
 
     start_message_worker()
 
@@ -86,6 +89,11 @@ def create_app():
     # Noon, every day -- sweeps whichever fellowship's check-in went
     # unanswered overnight, regardless of which specific day it was.
     register_task("fellowship_checkin_sweep", weekday=None, hour=12, func=process_stale_checkins)
+
+    # 13:00, every day -- an hour after the check-in sweep, so any
+    # absence the sweep itself just created has already landed before
+    # this looks for absences whose reward window has passed.
+    register_task("bandit_reward_computation", weekday=None, hour=13, func=compute_pending_rewards)
 
     start_scheduler()
 

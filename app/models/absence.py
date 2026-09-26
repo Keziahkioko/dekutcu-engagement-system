@@ -21,6 +21,8 @@ file -- we just can't message them a reason-capture prompt in that
 case, which app/services/attendance.py already guards separately.
 """
 
+from datetime import timedelta
+
 from app.database import get_connection
 
 
@@ -39,6 +41,15 @@ def init_absences_table():
             created_at TIMESTAMP
         )
     """)
+    # Stage 8 additions -- which bandit arm was chosen for this absence
+    # (and the exact context bucket it was sampled from, so a later
+    # reward update applies to the SAME cell that was actually sampled,
+    # not one recomputed after the fact with possibly-different data),
+    # and the reward once it's known (NULL until the next occurrence
+    # of that same activity has passed -- see bandit.py).
+    cursor.execute("ALTER TABLE absences ADD COLUMN IF NOT EXISTS context_key TEXT")
+    cursor.execute("ALTER TABLE absences ADD COLUMN IF NOT EXISTS chosen_arm TEXT")
+    cursor.execute("ALTER TABLE absences ADD COLUMN IF NOT EXISTS reward BOOLEAN")
     conn.commit()
     cursor.close()
     conn.close()
@@ -86,3 +97,103 @@ def record_reason(absence_id, reason_raw, reason_category, shows_distress):
     conn.commit()
     cursor.close()
     conn.close()
+
+
+def count_consecutive_misses(reg_number, activity_type, up_to_date):
+    """
+    How many consecutive WEEKLY occurrences (ending at up_to_date,
+    inclusive -- the current absence being processed already has its
+    own row by the time this is called) this member has been absent
+    for, counting backward until a gap -- a week with no absence row,
+    meaning they attended and broke the streak.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT activity_date FROM absences
+        WHERE reg_number = %s AND activity_type = %s AND activity_date <= %s
+        ORDER BY activity_date DESC
+    """, (reg_number, activity_type, up_to_date))
+    dates = [row["activity_date"] for row in cursor.fetchall()]
+    cursor.close()
+    conn.close()
+
+    if not dates:
+        return 0
+
+    count = 1
+    expected = dates[0] - timedelta(days=7)
+    for d in dates[1:]:
+        if d == expected:
+            count += 1
+            expected -= timedelta(days=7)
+        else:
+            break
+    return count
+
+
+def get_last_chosen_arm(reg_number, activity_type):
+    """
+    The most recent PRIOR arm chosen for this member+activity (if
+    any) -- used for the bandit's recency constraint (never repeat the
+    same arm twice running). Rows with chosen_arm still NULL (not yet
+    decided) are naturally excluded by the WHERE clause.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT chosen_arm FROM absences
+        WHERE reg_number = %s AND activity_type = %s AND chosen_arm IS NOT NULL
+        ORDER BY activity_date DESC LIMIT 1
+    """, (reg_number, activity_type))
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return row["chosen_arm"] if row else None
+
+
+def set_chosen_arm(absence_id, context_key, chosen_arm):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE absences SET context_key = %s, chosen_arm = %s WHERE id = %s",
+        (context_key, chosen_arm, absence_id)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def set_reward(absence_id, reward):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE absences SET reward = %s WHERE id = %s", (reward, absence_id))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def get_absences_awaiting_reward(cutoff_date):
+    """Every absence with a chosen strategy but no reward yet, whose next weekly occurrence has already passed cutoff_date."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM absences
+        WHERE chosen_arm IS NOT NULL AND reward IS NULL AND activity_date <= %s
+    """, (cutoff_date,))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
+
+
+def absence_exists_for_date(reg_number, activity_type, activity_date):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT 1 FROM absences WHERE reg_number = %s AND activity_type = %s AND activity_date = %s
+    """, (reg_number, activity_type, activity_date))
+    exists = cursor.fetchone() is not None
+    cursor.close()
+    conn.close()
+    return exists
