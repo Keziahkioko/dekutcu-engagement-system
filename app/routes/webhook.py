@@ -26,6 +26,7 @@ from app.models.pending_reassignment_resolution import get_pending_reassignment_
 from app.models.pending_event_creation import get_pending_event_creation
 from app.models.pending_rsvp import get_pending_rsvp
 from app.models.pending_attendance_marking import get_pending_attendance_marking
+from app.models.pending_fellowship_checkin import get_pending_fellowship_checkin
 from app.models.pending_reason_capture import get_pending_reason_capture
 from app.models.pending_message import (
     enqueue_message,
@@ -44,6 +45,8 @@ from app.services import leader_assignment
 from app.services import area_change
 from app.services import event_manager
 from app.services import attendance
+from app.services import fellowship_checkin
+from app.services import reason_capture
 from app.services.whatsapp_client import send_whatsapp_message
 
 webhook_bp = Blueprint("webhook", __name__)
@@ -209,8 +212,10 @@ def route_incoming_message(sender_number, message_text):
             return event_manager.handle_rsvp_message(sender_number, message_text)
         if get_pending_attendance_marking(sender_number) is not None:
             return attendance.handle_attendance_marking_message(sender_number, message_text)
+        if get_pending_fellowship_checkin(sender_number) is not None:
+            return fellowship_checkin.handle_checkin_message(sender_number, message_text)
         if get_pending_reason_capture(sender_number) is not None:
-            return attendance.handle_reason_capture_message(sender_number, message_text)
+            return reason_capture.handle_reason_capture_message(sender_number, message_text)
         return handle_intent_message(sender_number, message_text)
 
     if get_pending_registration(sender_number) is not None:

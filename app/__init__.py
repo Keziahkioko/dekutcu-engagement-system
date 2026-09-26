@@ -9,6 +9,8 @@ Every other file (run.py, tests) should go through create_app()
 instead of building a Flask app on its own.
 """
 
+import functools
+
 from flask import Flask
 from dotenv import load_dotenv
 
@@ -29,8 +31,11 @@ from app.models.scheduled_task_run import init_scheduled_task_runs_table
 from app.models.pending_attendance_marking import init_pending_attendance_marking_table
 from app.models.absence import init_absences_table
 from app.models.pending_reason_capture import init_pending_reason_capture_table
+from app.models.fellowship_checkin import init_fellowship_checkins_table
+from app.models.pending_fellowship_checkin import init_pending_fellowship_checkin_table
 from app.services.scheduler import start_scheduler, register_task
 from app.services.attendance import send_bible_study_nudges
+from app.services.fellowship_checkin import send_fellowship_checkin, process_stale_checkins, TRACKED_WEEKDAYS
 
 
 def create_app():
@@ -58,11 +63,30 @@ def create_app():
     init_pending_attendance_marking_table()
     init_absences_table()
     init_pending_reason_capture_table()
+    init_fellowship_checkins_table()
+    init_pending_fellowship_checkin_table()
 
     start_message_worker()
 
     # Tuesday, 21:00 Nairobi time -- weekday 1 = Tuesday (Monday=0 ... Sunday=6)
     register_task("bible_study_nudge", weekday=1, hour=21, func=send_bible_study_nudges)
+
+    # 21:00 each tracked fellowship day -- functools.partial binds each
+    # specific weekday value now, at registration time, rather than a
+    # plain lambda closing over the loop variable (which would make
+    # every task fire for whichever weekday the loop landed on LAST).
+    for weekday in TRACKED_WEEKDAYS:
+        register_task(
+            f"fellowship_checkin_{weekday}",
+            weekday=weekday,
+            hour=21,
+            func=functools.partial(send_fellowship_checkin, weekday),
+        )
+
+    # Noon, every day -- sweeps whichever fellowship's check-in went
+    # unanswered overnight, regardless of which specific day it was.
+    register_task("fellowship_checkin_sweep", weekday=None, hour=12, func=process_stale_checkins)
+
     start_scheduler()
 
     return app

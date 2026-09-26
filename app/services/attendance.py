@@ -2,24 +2,16 @@
 app/services/attendance.py
 
 Stage 7: the Bible Study side of reason capture -- the scheduled
-Tuesday-evening leader nudge, the leader's absence-marking reply, and
-the reason-capture conversation with each absent member (LLM
-classification into the six categories from the proposal, plus a
-distress safety-net).
+Tuesday-evening leader nudge, and the leader's absence-marking reply.
+Reason capture itself (classification, the distress safety-net) is
+shared machinery -- see reason_capture.py -- since the open-fellowship
+slice (fellowship_checkin.py) needs the exact same thing.
 
-Deliberately Bible-Study-only for now -- the open-fellowship
-check-in/regular-inference side is separate, not-yet-built machinery
-(see PROJECT_LOG.md's Objective 3 entry), even though it will
-eventually write to the same `absences` table.
-
-The distress flag is deliberately just a flag, not an escalation --
-Stage 11 (Escalation Manager) doesn't exist yet. This makes sure a
-serious reply gets a real, human-pointing response instead of the
-same generic "thanks for sharing" everything else gets, without
-pretending to be a full escalation system it isn't yet.
+Deliberately Bible-Study-only for now -- see PROJECT_LOG.md's
+Objective 3 entry for how this and the open-fellowship slice share the
+same `absences` table without sharing everything else.
 """
 
-import json
 from datetime import datetime, timezone, date
 
 from app.models.member import get_data_consenting_members, get_group_members
@@ -28,33 +20,11 @@ from app.models.pending_attendance_marking import (
     start_pending_attendance_marking,
     delete_pending_attendance_marking,
 )
-from app.models.pending_reason_capture import (
-    get_pending_reason_capture,
-    start_pending_reason_capture,
-    delete_pending_reason_capture,
-)
-from app.models.absence import create_absence, record_reason
+from app.models.absence import create_absence
 from app.services.whatsapp_client import send_whatsapp_message
-from app.services.llm_client import create_chat_completion
+from app.services import reason_capture
 
 ACTIVITY_TYPE_BIBLE_STUDY = "bible_study"
-
-_REASON_CATEGORIES = [
-    "scheduling_conflict", "health", "personal_difficulty",
-    "logistical_barrier", "disengagement", "unclassified",
-]
-
-_CLASSIFIER_SYSTEM_PROMPT = (
-    "You classify why a Bible Study member missed a session, based on their own "
-    "words. Respond with ONLY a JSON object: "
-    '{"category": "<one of: scheduling_conflict, health, personal_difficulty, '
-    'logistical_barrier, disengagement, unclassified>", "shows_distress": <true/false>}. '
-    "shows_distress should be true if the reply suggests something serious -- real "
-    "emotional struggle, a crisis, anything beyond a routine, low-stakes reason -- "
-    "not just because the reason itself is unfortunate (e.g. a scheduling conflict "
-    "or minor illness is NOT distress; something like feeling hopeless, overwhelmed, "
-    "or unsafe IS)."
-)
 
 
 def _now():
@@ -135,56 +105,13 @@ def handle_attendance_marking_message(whatsapp_id, message_text):
 
 
 def _start_reason_capture(whatsapp_id, absence_id, name):
-    message = (
-        f"Hey {name.split()[0]}, we noticed you weren't able to make it to Bible Study "
-        "today. Would you mind sharing why? This helps us support you better.\n\n"
-        "Reply 'skip' if you'd rather not say."
-    )
+    """
+    Sends directly rather than returning text, because the recipient
+    here (the absent member) is a DIFFERENT person from whoever is
+    replying in the current webhook turn (the leader who just marked
+    them absent).
+    """
+    message = reason_capture.build_reason_prompt("Bible Study", name)
     response = send_whatsapp_message(whatsapp_id, message)
     if response.status_code == 200:
-        start_pending_reason_capture(whatsapp_id, absence_id, _now())
-
-
-def handle_reason_capture_message(whatsapp_id, message_text):
-    text = message_text.strip()
-    pending = get_pending_reason_capture(whatsapp_id)
-    if pending is None:
-        return "Something went wrong on my end -- please message me again."
-
-    delete_pending_reason_capture(whatsapp_id)
-
-    if text.lower() == "skip":
-        record_reason(pending["absence_id"], None, "unclassified", False)
-        return "No problem -- thanks for letting us know either way."
-
-    category, shows_distress = _classify_reason(text)
-    record_reason(pending["absence_id"], text, category, shows_distress)
-
-    if shows_distress:
-        return (
-            "Thank you for sharing that, and I'm really sorry you're going through this. "
-            "Please don't hesitate to reach out to one of your leaders directly -- they "
-            "genuinely want to support you."
-        )
-    return "Thanks for sharing -- we appreciate you letting us know."
-
-
-def _classify_reason(text):
-    try:
-        response = create_chat_completion(
-            messages=[
-                {"role": "system", "content": _CLASSIFIER_SYSTEM_PROMPT},
-                {"role": "user", "content": text},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0,
-        )
-        parsed = json.loads(response.choices[0].message.content)
-        category = parsed.get("category", "unclassified")
-        if category not in _REASON_CATEGORIES:
-            category = "unclassified"
-        shows_distress = bool(parsed.get("shows_distress", False))
-        return category, shows_distress
-    except Exception as e:
-        print(f"Reason classification failed, defaulting to unclassified: {e}")
-        return "unclassified", False
+        reason_capture.begin_reason_capture(whatsapp_id, absence_id)

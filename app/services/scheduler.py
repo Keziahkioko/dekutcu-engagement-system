@@ -27,10 +27,11 @@ NAIROBI = ZoneInfo("Africa/Nairobi")
 
 _CHECK_INTERVAL_SECONDS = 300  # 5 minutes -- hour-level precision is enough, nothing finer is needed
 
-_tasks = []  # (name, weekday, hour, func) -- weekday: Monday=0 ... Sunday=6, matching date.weekday()
+_tasks = []  # (name, weekday, hour, func) -- weekday: Monday=0 ... Sunday=6 (matching date.weekday()), or None for "every day"
 
 
 def register_task(name, weekday, hour, func):
+    """weekday=None means the task runs every day at this hour."""
     _tasks.append((name, weekday, hour, func))
 
 
@@ -39,7 +40,9 @@ def _run_due_tasks():
     today = now.date()
 
     for name, weekday, hour, func in _tasks:
-        if now.weekday() != weekday or now.hour != hour:
+        if weekday is not None and now.weekday() != weekday:
+            continue
+        if now.hour != hour:
             continue
         if get_last_run_date(name) == today:
             continue  # already fired today, within this same hour-long window
