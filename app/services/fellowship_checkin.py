@@ -132,7 +132,7 @@ def handle_checkin_message(whatsapp_id, message_text):
     # Substantive text -- already both the absence signal AND the
     # reason in one message, so classify it directly rather than
     # asking a redundant follow-up.
-    return reason_capture.classify_and_record(absence_id, text)
+    return reason_capture.classify_and_record(whatsapp_id, absence_id, text)
 
 
 def _last_n_occurrences(weekday, n, before_date):

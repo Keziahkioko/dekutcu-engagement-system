@@ -16,6 +16,14 @@ check-in's bare-"no" case needs to reply to the SAME person who just
 messaged -- returning text through the normal reply path rather than
 sending a second, separate message. Same underlying mechanism, two
 different callers wiring it up differently.
+
+Severity assessment (Stage 11) is deliberately a SEPARATE call to
+escalation.py rather than folded into this module's own classifier
+output, even though that costs an extra LLM round trip -- severity is
+safety-relevant and needs to use the exact same logic everywhere it's
+checked (here, and the general needs_support intent in
+intent_router.py), not two similar-but-not-identical criteria that
+could disagree with each other.
 """
 
 import json
@@ -27,8 +35,10 @@ from app.models.pending_reason_capture import (
     delete_pending_reason_capture,
 )
 from app.models.absence import record_reason, get_absence_by_id
+from app.models.member import get_member_by_whatsapp_id
 from app.services.llm_client import create_chat_completion
 from app.services import bandit
+from app.services import escalation
 
 _REASON_CATEGORIES = [
     "scheduling_conflict", "health", "personal_difficulty",
@@ -39,12 +49,7 @@ _CLASSIFIER_SYSTEM_PROMPT = (
     "You classify why a member missed an activity, based on their own words. "
     "Respond with ONLY a JSON object: "
     '{"category": "<one of: scheduling_conflict, health, personal_difficulty, '
-    'logistical_barrier, disengagement, unclassified>", "shows_distress": <true/false>}. '
-    "shows_distress should be true if the reply suggests something serious -- real "
-    "emotional struggle, a crisis, anything beyond a routine, low-stakes reason -- "
-    "not just because the reason itself is unfortunate (e.g. a scheduling conflict "
-    "or minor illness is NOT distress; something like feeling hopeless, overwhelmed, "
-    "or unsafe IS)."
+    'logistical_barrier, disengagement, unclassified>"}.'
 )
 
 
@@ -67,6 +72,7 @@ def begin_reason_capture(whatsapp_id, absence_id):
 
 
 def classify_reason(text):
+    """Classifies into one of the six absence-reason categories only -- severity is assess_severity's job, see module docstring."""
     try:
         response = create_chat_completion(
             messages=[
@@ -78,21 +84,21 @@ def classify_reason(text):
         )
         parsed = json.loads(response.choices[0].message.content)
         category = parsed.get("category", "unclassified")
-        if category not in _REASON_CATEGORIES:
-            category = "unclassified"
-        shows_distress = bool(parsed.get("shows_distress", False))
-        return category, shows_distress
+        return category if category in _REASON_CATEGORIES else "unclassified"
     except Exception as e:
-        print(f"Reason classification failed, defaulting to unclassified: {e}")
-        return "unclassified", False
+        try:
+            print(f"Reason classification failed, defaulting to unclassified: {e}")
+        except UnicodeEncodeError:
+            print("Reason classification failed, defaulting to unclassified (error message omitted -- contained non-ASCII characters)")
+        return "unclassified"
 
 
 def _select_strategy_message(absence_id, reason_category):
     """
     Stage 8 hook: once a reason is on record, the bandit picks a
     follow-up strategy and this returns the message for it. Only
-    called for the NON-distress path -- a distress reply already gets
-    its own, more important response pointing to a human leader, and
+    called for the "none" severity path -- distress/acute_risk replies
+    get their own, more important escalation response instead, and
     shouldn't also be treated as ordinary bandit-training fodder mixed
     in with routine re-engagement optimization.
     """
@@ -103,24 +109,26 @@ def _select_strategy_message(absence_id, reason_category):
     )
 
 
-def classify_and_record(absence_id, text):
+def classify_and_record(whatsapp_id, absence_id, text):
     """
     Classifies raw text and records it against the given absence,
-    returning the reply to send -- the routine ack (plus a bandit
-    -selected follow-up strategy), or the distress safety-net reply.
-    Shared by the interactive (pending_reason_capture) reply path and
-    the fellowship slice's "already explained themselves unprompted,
-    in the same message" path.
+    returning the reply to send. Shared by the interactive
+    (pending_reason_capture) reply path and the fellowship slice's
+    "already explained themselves unprompted, in the same message"
+    path -- both always reply to the SAME person currently messaging,
+    so escalation's consent-ask/acute-risk text is returned directly
+    rather than sent as a separate message.
     """
-    category, shows_distress = classify_reason(text)
-    record_reason(absence_id, text, category, shows_distress)
+    category = classify_reason(text)
+    severity = escalation.assess_severity(text)
+    record_reason(absence_id, text, category, severity)
 
-    if shows_distress:
-        return (
-            "Thank you for sharing that, and I'm really sorry you're going through this. "
-            "Please don't hesitate to reach out to one of your leaders directly -- they "
-            "genuinely want to support you."
-        )
+    if severity == "acute_risk":
+        member = get_member_by_whatsapp_id(whatsapp_id)
+        return escalation.escalate_acute(member, "reason_capture", text)
+
+    if severity == "distress":
+        return escalation.start_consent_flow(whatsapp_id, "reason_capture", text)
 
     strategy_message = _select_strategy_message(absence_id, category)
     return f"Thanks for sharing -- we appreciate you letting us know.\n\n{strategy_message}"
@@ -135,8 +143,8 @@ def handle_reason_capture_message(whatsapp_id, message_text):
     delete_pending_reason_capture(whatsapp_id)
 
     if text.lower() == "skip":
-        record_reason(pending["absence_id"], None, "unclassified", False)
+        record_reason(pending["absence_id"], None, "unclassified", "none")
         strategy_message = _select_strategy_message(pending["absence_id"], "unclassified")
         return f"No problem -- thanks for letting us know either way.\n\n{strategy_message}"
 
-    return classify_and_record(pending["absence_id"], text)
+    return classify_and_record(whatsapp_id, pending["absence_id"], text)

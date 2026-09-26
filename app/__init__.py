@@ -34,6 +34,8 @@ from app.models.pending_reason_capture import init_pending_reason_capture_table
 from app.models.fellowship_checkin import init_fellowship_checkins_table
 from app.models.pending_fellowship_checkin import init_pending_fellowship_checkin_table
 from app.models.bandit_posterior import init_bandit_posteriors_table
+from app.models.escalation import init_escalations_table
+from app.models.pending_escalation_consent import init_pending_escalation_consent_table
 from app.services.scheduler import start_scheduler, register_task
 from app.services.attendance import send_bible_study_nudges
 from app.services.fellowship_checkin import send_fellowship_checkin, process_stale_checkins, TRACKED_WEEKDAYS
@@ -68,6 +70,8 @@ def create_app():
     init_fellowship_checkins_table()
     init_pending_fellowship_checkin_table()
     init_bandit_posteriors_table()
+    init_escalations_table()
+    init_pending_escalation_consent_table()
 
     start_message_worker()
 

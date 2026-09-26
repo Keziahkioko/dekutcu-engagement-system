@@ -72,6 +72,7 @@ from app.services.registration import AREAS
 from app.services import leader_assignment
 from app.services import area_change
 from app.services import event_manager
+from app.services import escalation
 from app.services.group_query import answer_group_question
 from app.services.llm_client import create_chat_completion
 
@@ -168,8 +169,27 @@ def is_resume_message(text):
 def classify_intent(message_text, whatsapp_id=None):
     """
     Calls Groq to classify the message into one of the intents in
-    INTENT_DEFINITIONS. Falls back to "unclear" on any API error or
-    unparseable/invalid response.
+    INTENT_DEFINITIONS.
+
+    Falls back to "needs_support" (NOT "unclear") on any API-level
+    error or unparseable response -- found via testing that Groq's
+    model sometimes refuses to return the requested JSON label at all
+    for messages describing acute self-harm/suicidal content, writing
+    a full crisis-response paragraph instead, which fails json_object
+    validation and raises here. Falling back to "unclear" in that
+    exact case would silently drop the highest-stakes messages into a
+    generic "didn't catch that" reply, defeating the entire point of
+    Stage 11's escalation path. "needs_support" instead routes it into
+    assess_severity, same "unnecessary check-in costs less than
+    missing someone who needs help" reasoning already used there (see
+    escalation.py) -- worst case, a false trigger asks an unneeded
+    consent question; the alternative risks missing a real one.
+
+    A genuinely unparseable-but-successful response (valid JSON, just
+    an intent label outside VALID_INTENTS) is a different, milder case
+    and still falls back to "unclear" below -- that only means the
+    model picked a real answer that isn't one we recognize, not that
+    classification broke entirely.
 
     If whatsapp_id is given, recent conversation history is prepended
     as context (see conversation_history.py) -- resolves short/
@@ -197,8 +217,11 @@ def classify_intent(message_text, whatsapp_id=None):
         return "unclear"
 
     except Exception as e:
-        print(f"Intent classification failed, falling back to 'unclear': {e}")
-        return "unclear"
+        try:
+            print(f"Intent classification failed, falling back to 'needs_support': {e}")
+        except UnicodeEncodeError:
+            print("Intent classification failed, falling back to 'needs_support' (error message omitted -- contained non-ASCII characters)")
+        return "needs_support"
 
 
 def set_followup_consent(whatsapp_id, value):
@@ -423,6 +446,39 @@ def _handle_update_details(member, text):
         "Right now I can only help you update your area. If that's what you meant, "
         "try saying something like 'I want to update my area'. For other changes, "
         "please contact a leader directly."
+    )
+
+
+def _handle_request_human(member, text):
+    """
+    Explicitly asking for a person already IS the consent -- escalates
+    directly, no severity check and no consent question first (see
+    escalation.py's module docstring for why this differs from
+    needs_support).
+    """
+    return escalation.escalate_now(member, "request_human", text)
+
+
+def _handle_needs_support(member, text):
+    """
+    Routes through the same two-tier severity model reason_capture.py
+    uses for absence-reply distress -- acute_risk escalates regardless
+    of consent (always transparently); distress asks first; none means
+    the classifier didn't actually find distress in THIS message even
+    though the intent router's own (coarser) classification flagged it,
+    so it gets a plain supportive reply instead of a false escalation.
+    """
+    severity = escalation.assess_severity(text)
+
+    if severity == "acute_risk":
+        return escalation.escalate_acute(member, "needs_support", text)
+
+    if severity == "distress":
+        return escalation.start_consent_flow(member["whatsapp_id"], "needs_support", text)
+
+    return (
+        "I hear you -- thanks for sharing that with me. If things ever feel "
+        "like too much, please don't hesitate to reach out to a leader directly."
     )
 
 
@@ -665,8 +721,8 @@ _STUB_HANDLERS = {
     "unsubscribe_followup": _handle_unsubscribe_followup,
     "resume_followup": _handle_resume_followup,
     "withdraw_data_consent": _handle_withdraw_data_consent,
-    "request_human": _handle_stub("Connecting you to a leader"),
-    "needs_support": _handle_stub("Connecting you to a leader"),
+    "request_human": _handle_request_human,
+    "needs_support": _handle_needs_support,
     "leadership_query": _handle_stub("Leadership reports"),
     "send_announcement": _handle_stub("Sending announcements"),
     "allocate_groups": _handle_allocate_groups,

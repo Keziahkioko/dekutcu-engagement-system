@@ -7,11 +7,15 @@ so the open-fellowship side (not yet built) can write to the same
 table later without a redesign, matching the shared-bandit design
 settled in PROJECT_LOG.md. reason_category is the LLM classifier's
 output (one of the six categories from the proposal); reason_raw is
-the member's own words, kept alongside it. shows_distress is a
-safety-net flag checked at capture time -- Stage 11 (Escalation
-Manager) doesn't exist yet, so this doesn't trigger anything
-automated, it just makes sure a serious reply isn't filed away as an
-ordinary data point (see app/services/attendance.py).
+the member's own words, kept alongside it.
+
+distress_level (Stage 11) replaces the original shows_distress
+boolean with a three-way severity ('none' / 'distress' / 'acute_risk')
+-- the old column stays in the table for schema stability but is no
+longer written to; there's no real production data on either yet, so
+nothing is lost by the switch. See app/services/escalation.py for how
+'distress' (asks consent first) and 'acute_risk' (escalates
+regardless) are handled differently.
 
 Keyed by reg_number, NOT whatsapp_id -- matching this project's own
 identity model since Stage 2 (reg_number is the permanent identity;
@@ -50,6 +54,9 @@ def init_absences_table():
     cursor.execute("ALTER TABLE absences ADD COLUMN IF NOT EXISTS context_key TEXT")
     cursor.execute("ALTER TABLE absences ADD COLUMN IF NOT EXISTS chosen_arm TEXT")
     cursor.execute("ALTER TABLE absences ADD COLUMN IF NOT EXISTS reward BOOLEAN")
+    # Stage 11 addition -- see module docstring for why this replaces
+    # shows_distress rather than reusing it.
+    cursor.execute("ALTER TABLE absences ADD COLUMN IF NOT EXISTS distress_level TEXT")
     conn.commit()
     cursor.close()
     conn.close()
@@ -86,14 +93,14 @@ def get_absence_by_id(absence_id):
     return row
 
 
-def record_reason(absence_id, reason_raw, reason_category, shows_distress):
+def record_reason(absence_id, reason_raw, reason_category, distress_level):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE absences
-        SET reason_raw = %s, reason_category = %s, shows_distress = %s
+        SET reason_raw = %s, reason_category = %s, distress_level = %s
         WHERE id = %s
-    """, (reason_raw, reason_category, shows_distress, absence_id))
+    """, (reason_raw, reason_category, distress_level, absence_id))
     conn.commit()
     cursor.close()
     conn.close()
