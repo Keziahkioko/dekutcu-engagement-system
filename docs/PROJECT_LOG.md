@@ -28,7 +28,7 @@ suspected stale.
 | 3 | Registration & Consent | ✅ Done |
 | 4 | Intent Router | ✅ Done (core router + 4 real intents; several intents deliberately still stubbed pending their own later stage — see detail below) |
 | 5 | Allocation Engine (Objective 2) | ✅ Core engine done, tested, deployed, verified live. Plus substantial extra infrastructure built alongside it (not in the original 15-stage plan) — see detail below |
-| 6 | Event & RSVP Manager | ⬜ Not started |
+| 6 | Event & RSVP Manager | ✅ Done, tested live end-to-end (2026-09-26) — see detail below |
 | 7 | Reason Capture & Classifier | ⬜ Not started |
 | 8 | Contextual Bandit Engine (Objective 3) | ⬜ Not started |
 | 9 | Message Generator | ⬜ Not started |
@@ -56,7 +56,7 @@ Flask webhook live on Render (`dekutcu-engagement-system.onrender.com`), full Wh
 Full WhatsApp conversation: reg number (normalized) → name → gender → year of study → area (10 fixed areas) → **two separate consents** (data/tracking/placement, and proactive follow-up check-ins — opting out of follow-up does NOT affect active-membership/welfare status). Field-name correction at the review step; `cancel` = full restart anywhere. Returning members auto-relink by `reg_number` from a new phone.
 
 ### Stage 4 — Intent Router
-STOP/RESUME keywords checked globally, hardcoded, before registration status and before the LLM — an opt-out must never depend on an AI classifier having a good day. Everything else routes through Groq-based classification. Genuinely implemented: `update_details` (area only, see Stage 5 detail), `unsubscribe_followup`, `resume_followup`, `withdraw_data_consent`, plus everything added during Stage 5 (see below). Deliberately still stubbed, pending their own stage: `general_question`, `event_rsvp`, `checkin_response`, `feedback_response`, `purchase_study_guide`, `request_human`, `needs_support`.
+STOP/RESUME keywords checked globally, hardcoded, before registration status and before the LLM — an opt-out must never depend on an AI classifier having a good day. Everything else routes through Groq-based classification. Genuinely implemented: `update_details` (area only, see Stage 5 detail), `unsubscribe_followup`, `resume_followup`, `withdraw_data_consent`, plus everything added during Stage 5 (see below). Deliberately still stubbed, pending their own stage: `general_question`, `checkin_response`, `feedback_response`, `purchase_study_guide`, `request_human`, `needs_support`. (`event_rsvp` genuinely implemented as of Stage 6, see below.)
 
 ### Stage 5 — Allocation Engine (Objective 2)
 Core engine (`app/services/allocation.py`): three interchangeable functions sharing the same sizing logic — `allocate_members_greedy` (fast round-robin baseline), `allocate_members_ilp` (PuLP/CBC, exact optimization), `allocate_members_topup` (only places *new* members, leaves existing placements alone — see decision log). Wired into WhatsApp as `allocate_groups`/`reshuffle_groups`, background-threaded (the ILP is too slow for a synchronous webhook reply), with a real leader confirmation flow. **Verified live end-to-end** against 200 real+synthetic members on the deployed Render app, not just locally.
@@ -65,6 +65,15 @@ While finishing this stage's real-world WhatsApp deployment, three pieces of inf
 - **Group leader management** — recruiting and tracking who leads each area's Bible study group(s), distinct from `is_leader` (which gates exec/org actions). Needed before "your leader is X" could mean anything.
 - **Area-change reassignment** — a member changing residence area needs their group membership handled without a leader losing track of it.
 - **`group_query` tool-calling** — after the leader-management and reassignment work produced a growing pile of narrow intents (view leaders, resolve pending, etc.), read-only *questions* about groups/leaders/membership moved to LLM tool-calling instead of one hand-coded intent per question shape. See decision log for why, and why actions stayed on the fixed-intent path.
+
+### Stage 6 — Event & RSVP Manager
+Designed directly from the proposal's own scope section (1.6) rather than assumption -- it specifies a real fork this stage had to build around: **"tracked" events** (Bible Study, cell group, fellowship) get individual RSVP, organization-wide to every data-consenting member with a group placement (confirmed directly, not scoped to one group/area); **"broadcast" events** (Sunday service) are announcement-only, explicitly "individual follow-up expectations do not apply". `events` (`event_type`, title, a real `DATE` column so "what's coming up" can actually filter past events in SQL, time/location/description as plain text, `created_by`) and `event_rsvps` (one row per event+member, `ON CONFLICT` upsert so changing your mind overwrites rather than duplicates) — two new tables, `app/models/event.py` / `event_rsvp.py`.
+
+Two new pending-state tables (`pending_event_creation`, `pending_rsvps`) mirror the shape every other guided flow in this project already uses. Three intents: `create_event` (new, leader-only, a 6-step guided flow — type → title → date → time → location → description → confirm, broadcasting on confirm) and a split of the previously-conflated `event_rsvp` stub into `list_events` (read-only, a plain direct answer rather than LLM tool-calling, since "what's coming up" is one fixed shape unlike `group_query`'s genuinely varied phrasings) and `event_rsvp` (the actual RSVP action, numbered-list disambiguation if more than one tracked event is open — same "never free-text parse a selection" rule used everywhere else in this project).
+
+**Deliberately not built in this stage**, per the proposal's own component split: attendance confirmation (Stage 7's job — reason capture needs to know someone didn't show before asking why, so `event_rsvps` is intentionally left extendable rather than pre-building a column Stage 7 hasn't earned yet), the bandit (Stage 8), leader-side "who's coming" reporting (Stage 13 — the RSVP data is already sitting there for it), and post-event feedback collection (raised as an open question, left undecided rather than assumed either way).
+
+**Verified end-to-end against the real database and the real webhook entry point** (`route_incoming_message`, not a shortcut around it), WhatsApp sends mocked: full leader creation flow for both event types, invalid-date rejection then correction, broadcast correctly reaching only the one real-`whatsapp_id` member among 200 (mostly-synthetic) test members, the tracked-vs-broadcast notification wording difference (RSVP invite vs plain announcement), multi-event RSVP disambiguation via numbered list, and `cancel` working mid-flow in both the creation and RSVP conversations.
 
 ---
 

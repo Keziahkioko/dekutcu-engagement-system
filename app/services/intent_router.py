@@ -71,6 +71,7 @@ from app.services.whatsapp_client import send_whatsapp_message
 from app.services.registration import AREAS
 from app.services import leader_assignment
 from app.services import area_change
+from app.services import event_manager
 from app.services.group_query import answer_group_question
 from app.services.llm_client import create_chat_completion
 
@@ -82,7 +83,9 @@ RESUME_KEYWORDS = {"resume"}
 INTENT_DEFINITIONS = {
     "greeting_smalltalk": "Casual greeting, small talk, thanks, or chit-chat with no specific request.",
     "general_question": "A general question about the organization, its beliefs, or its activities -- NOT about specific Bible study groups, group leaders, or group membership. Even a short follow-up like 'what about X' or 'and Y?' belongs to group_query instead if the conversation was just discussing groups/leaders/membership -- don't default here just because the message doesn't say the word 'group'.",
-    "event_rsvp": "Asking about upcoming events, or responding to/RSVPing for one.",
+    "list_events": "Asking what events or activities are coming up -- a read-only question, NOT wanting to RSVP.",
+    "event_rsvp": "Wanting to RSVP (yes/no/maybe) to a specific upcoming event -- NOT just asking what's coming up.",
+    "create_event": "A leader wanting to create/announce a new event (Bible Study, cell group, fellowship, or a broadcast-only gathering like Sunday service).",
     "checkin_response": "Explaining or giving a reason for missing a session or event.",
     "feedback_response": "Giving feedback, a rating, or comments about a past event.",
     "purchase_study_guide": "Wanting to buy or pay for a Bible Study guide.",
@@ -110,7 +113,7 @@ VALID_INTENTS = set(INTENT_DEFINITIONS.keys())
 LEADER_ONLY_INTENTS = {
     "leadership_query", "send_announcement", "allocate_groups", "reshuffle_groups",
     "nominate_group_leader", "view_group_leaders", "resolve_pending_leader", "remove_group_leader",
-    "resolve_reassignments",
+    "resolve_reassignments", "create_event",
 }
 
 # Guards against two allocation runs (each ~10-15 seconds) overlapping
@@ -363,6 +366,24 @@ def _handle_group_query(member, text):
     actually answer with real names. See app/services/group_query.py.
     """
     return answer_group_question(member, text)
+
+
+def _handle_list_events(member, text):
+    """
+    A one-shot read, no pending state needed -- deliberately NOT
+    LLM tool-calling like group_query: "what's coming up" is a single
+    fixed shape, unlike group_query's genuinely varied phrasings, so a
+    plain direct answer is enough.
+    """
+    return event_manager.list_upcoming_events()
+
+
+def _handle_event_rsvp(member, text):
+    return event_manager.start_rsvp(member["whatsapp_id"])
+
+
+def _handle_create_event(member, text):
+    return event_manager.start_create_event(member["whatsapp_id"])
 
 
 # ---------------------------------------------------------------------
@@ -634,7 +655,9 @@ def _handle_stub(feature_name):
 _STUB_HANDLERS = {
     "greeting_smalltalk": lambda member, text: f"Hey {member['name'].split()[0]}! How can I help?",
     "general_question": _handle_stub("Answering general questions"),
-    "event_rsvp": _handle_stub("Event info and RSVPs"),
+    "list_events": _handle_list_events,
+    "event_rsvp": _handle_event_rsvp,
+    "create_event": _handle_create_event,
     "checkin_response": _handle_stub("Check-in handling"),
     "feedback_response": _handle_stub("Feedback collection"),
     "purchase_study_guide": _handle_stub("Study guide payments"),

@@ -21,6 +21,10 @@ from app.models.pending_area_change import init_pending_area_changes_table
 from app.models.pending_reassignment_resolution import init_pending_reassignment_resolutions_table
 from app.models.conversation_history import init_conversation_history_table
 from app.models.pending_message import init_pending_messages_table
+from app.models.event import init_events_table
+from app.models.event_rsvp import init_event_rsvps_table
+from app.models.pending_event_creation import init_pending_event_creation_table
+from app.models.pending_rsvp import init_pending_rsvps_table
 
 
 def create_app():
@@ -40,6 +44,10 @@ def create_app():
     init_pending_reassignment_resolutions_table()
     init_conversation_history_table()
     init_pending_messages_table()
+    init_events_table()
+    init_event_rsvps_table()
+    init_pending_event_creation_table()
+    init_pending_rsvps_table()
 
     start_message_worker()
 
