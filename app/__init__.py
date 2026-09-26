@@ -25,6 +25,12 @@ from app.models.event import init_events_table
 from app.models.event_rsvp import init_event_rsvps_table
 from app.models.pending_event_creation import init_pending_event_creation_table
 from app.models.pending_rsvp import init_pending_rsvps_table
+from app.models.scheduled_task_run import init_scheduled_task_runs_table
+from app.models.pending_attendance_marking import init_pending_attendance_marking_table
+from app.models.absence import init_absences_table
+from app.models.pending_reason_capture import init_pending_reason_capture_table
+from app.services.scheduler import start_scheduler, register_task
+from app.services.attendance import send_bible_study_nudges
 
 
 def create_app():
@@ -48,7 +54,15 @@ def create_app():
     init_event_rsvps_table()
     init_pending_event_creation_table()
     init_pending_rsvps_table()
+    init_scheduled_task_runs_table()
+    init_pending_attendance_marking_table()
+    init_absences_table()
+    init_pending_reason_capture_table()
 
     start_message_worker()
+
+    # Tuesday, 21:00 Nairobi time -- weekday 1 = Tuesday (Monday=0 ... Sunday=6)
+    register_task("bible_study_nudge", weekday=1, hour=21, func=send_bible_study_nudges)
+    start_scheduler()
 
     return app

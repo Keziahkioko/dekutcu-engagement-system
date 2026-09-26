@@ -25,6 +25,8 @@ from app.models.pending_area_change import get_pending_area_change
 from app.models.pending_reassignment_resolution import get_pending_reassignment_resolution
 from app.models.pending_event_creation import get_pending_event_creation
 from app.models.pending_rsvp import get_pending_rsvp
+from app.models.pending_attendance_marking import get_pending_attendance_marking
+from app.models.pending_reason_capture import get_pending_reason_capture
 from app.models.pending_message import (
     enqueue_message,
     claim_next_message,
@@ -41,6 +43,7 @@ from app.services.intent_router import (
 from app.services import leader_assignment
 from app.services import area_change
 from app.services import event_manager
+from app.services import attendance
 from app.services.whatsapp_client import send_whatsapp_message
 
 webhook_bp = Blueprint("webhook", __name__)
@@ -175,8 +178,9 @@ def route_incoming_message(sender_number, message_text):
        leader (Stage 6, a multi-step conversation -- see
        leader_assignment.py), updating their own area, resolving a
        pending reassignment (see area_change.py), creating an event,
-       or RSVPing to one (see event_manager.py): continue that
-       conversation.
+       RSVPing to one (see event_manager.py), marking Bible Study
+       attendance as a leader, or answering why they were absent (see
+       attendance.py): continue that conversation.
     4. Already-registered member, no pending confirmation or
        in-progress conversation: hand off to the real intent router
        (Stage 4).
@@ -203,6 +207,10 @@ def route_incoming_message(sender_number, message_text):
             return event_manager.handle_create_event_message(sender_number, message_text)
         if get_pending_rsvp(sender_number) is not None:
             return event_manager.handle_rsvp_message(sender_number, message_text)
+        if get_pending_attendance_marking(sender_number) is not None:
+            return attendance.handle_attendance_marking_message(sender_number, message_text)
+        if get_pending_reason_capture(sender_number) is not None:
+            return attendance.handle_reason_capture_message(sender_number, message_text)
         return handle_intent_message(sender_number, message_text)
 
     if get_pending_registration(sender_number) is not None:
