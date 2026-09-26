@@ -312,12 +312,27 @@ def answer_group_question(member, message_text):
             if not reply_message.tool_calls:
                 return reply_message.content or _FALLBACK_MESSAGE
 
-            # Stored as a plain dict, not the SDK's own message object --
-            # if a later round in this same loop falls back to a
-            # DIFFERENT provider (see llm_client.py), that provider's
-            # client needs to be able to serialize the whole message
-            # list, including this one.
-            messages.append(reply_message.model_dump())
+            # Stored as a minimal plain dict, not the SDK's own message
+            # object and NOT a full model_dump() -- if a later round in
+            # this same loop falls back to a DIFFERENT provider (see
+            # llm_client.py), that provider needs to serialize the whole
+            # message list, including this one. A full model_dump() was
+            # tried first and broke the normal Groq-only case: it
+            # includes extra fields (e.g. "annotations") that Groq's own
+            # API doesn't recognize and rejects when they're fed back in
+            # on the NEXT round. Only role/content/tool_calls are ever
+            # actually needed here.
+            assistant_message = {"role": "assistant", "content": reply_message.content}
+            if reply_message.tool_calls:
+                assistant_message["tool_calls"] = [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {"name": call.function.name, "arguments": call.function.arguments},
+                    }
+                    for call in reply_message.tool_calls
+                ]
+            messages.append(assistant_message)
             for call in reply_message.tool_calls:
                 func = dispatch.get(call.function.name)
                 if func is None:
