@@ -29,6 +29,7 @@ from app.models.pending_attendance_marking import get_pending_attendance_marking
 from app.models.pending_fellowship_checkin import get_pending_fellowship_checkin
 from app.models.pending_reason_capture import get_pending_reason_capture
 from app.models.pending_escalation_consent import get_pending_escalation_consent
+from app.models.pending_feedback import get_pending_feedback
 from app.models.pending_message import (
     enqueue_message,
     claim_next_message,
@@ -49,6 +50,7 @@ from app.services import attendance
 from app.services import fellowship_checkin
 from app.services import reason_capture
 from app.services import escalation
+from app.services import feedback
 from app.services.whatsapp_client import send_whatsapp_message
 
 webhook_bp = Blueprint("webhook", __name__)
@@ -185,9 +187,11 @@ def route_incoming_message(sender_number, message_text):
        pending reassignment (see area_change.py), creating an event,
        RSVPing to one (see event_manager.py), marking Bible Study
        attendance as a leader, answering why they were absent (see
-       attendance.py), or answering a pending "is it okay to notify a
-       leader?" consent question (see escalation.py): continue that
-       conversation.
+       attendance.py), answering a pending "is it okay to notify a
+       leader?" consent question (see escalation.py), or answering a
+       feedback question (see feedback.py -- the one flow that can hand
+       the message back to step 4 if it isn't really feedback):
+       continue that conversation.
     4. Already-registered member, no pending confirmation or
        in-progress conversation: hand off to the real intent router
        (Stage 4).
@@ -222,6 +226,13 @@ def route_incoming_message(sender_number, message_text):
             return reason_capture.handle_reason_capture_message(sender_number, message_text)
         if get_pending_escalation_consent(sender_number) is not None:
             return escalation.handle_consent_reply(sender_number, message_text)
+        if get_pending_feedback(sender_number) is not None:
+            # Unlike every other pending flow, this one can decline the
+            # message (expired, or not actually feedback -- see
+            # feedback.py) and let it fall through to normal routing.
+            reply = feedback.handle_feedback_message(sender_number, message_text)
+            if reply is not None:
+                return reply
         return handle_intent_message(sender_number, message_text)
 
     if get_pending_registration(sender_number) is not None:

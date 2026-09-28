@@ -77,6 +77,7 @@ ACTIVITY_DISPLAY_NAMES = {
     "wednesday_prayers": "Wednesday Prayers",
     "thursday_fellowship": "Thursday Fellowship",
     "friday_fellowship": "Friday Fellowship",
+    "sunday_service": "Sunday Service",
 }
 
 _SYSTEM_PROMPT_TEMPLATE = """You write a short, warm WhatsApp message to a DeKUTCU (Christian Union)
@@ -103,7 +104,8 @@ naturally to what they actually said. No preamble, no quotation marks,
 just the message text itself."""
 
 
-def _display_name_for(activity_type):
+def display_name_for(activity_type):
+    """Public -- also used by the feedback prompts, so every activity is named the same way everywhere."""
     return ACTIVITY_DISPLAY_NAMES.get(activity_type, activity_type.replace("_", " ").title())
 
 
@@ -120,7 +122,7 @@ def generate_arm_message(arm, activity_type, reason_text=None, member_name=None)
     verbatim to a real member. Only the first name is ever passed in,
     same convention already used elsewhere in this project.
     """
-    activity_display_name = _display_name_for(activity_type)
+    activity_display_name = display_name_for(activity_type)
 
     if reason_text:
         reason_line = f'Their stated reason for missing {activity_display_name}: "{reason_text}"'

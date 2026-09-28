@@ -36,6 +36,9 @@ from app.models.pending_fellowship_checkin import init_pending_fellowship_checki
 from app.models.bandit_posterior import init_bandit_posteriors_table
 from app.models.escalation import init_escalations_table
 from app.models.pending_escalation_consent import init_pending_escalation_consent_table
+from app.models.checkin_broadcast import init_checkin_broadcasts_table
+from app.models.feedback_request import init_feedback_requests_table
+from app.models.pending_feedback import init_pending_feedback_table
 from app.services.scheduler import start_scheduler, register_task
 from app.services.attendance import send_bible_study_nudges
 from app.services.fellowship_checkin import send_fellowship_checkin, process_stale_checkins, TRACKED_WEEKDAYS
@@ -72,6 +75,9 @@ def create_app():
     init_bandit_posteriors_table()
     init_escalations_table()
     init_pending_escalation_consent_table()
+    init_checkin_broadcasts_table()
+    init_feedback_requests_table()
+    init_pending_feedback_table()  # after feedback_requests -- it references that table
 
     start_message_worker()
 

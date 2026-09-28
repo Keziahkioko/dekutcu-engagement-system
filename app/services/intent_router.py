@@ -49,6 +49,7 @@ pattern used throughout Stage 6.
 import os
 import json
 import threading
+from datetime import date
 
 from app.models.member import (
     get_member_by_whatsapp_id,
@@ -73,6 +74,9 @@ from app.services import leader_assignment
 from app.services import area_change
 from app.services import event_manager
 from app.services import escalation
+from app.services import fellowship_checkin
+from app.services import feedback
+from app.services.message_generator import display_name_for
 from app.services.group_query import answer_group_question
 from app.services.llm_client import create_chat_completion
 
@@ -106,6 +110,7 @@ INTENT_DEFINITIONS = {
     "resolve_pending_leader": "A leader wanting to manually confirm that a pending group-leader candidate has accepted, e.g. because they agreed in person rather than replying on WhatsApp.",
     "remove_group_leader": "A leader wanting to remove someone as a group leader.",
     "resolve_reassignments": "A leader wanting to review and act on pending member area-change reassignments.",
+    "send_checkin": "A leader wanting to send out the 'were you at today's fellowship/service?' attendance check-in (and feedback question) to members right now, usually as a session is ending.",
     "unclear": "Doesn't confidently match any of the above.",
 }
 
@@ -114,7 +119,7 @@ VALID_INTENTS = set(INTENT_DEFINITIONS.keys())
 LEADER_ONLY_INTENTS = {
     "leadership_query", "send_announcement", "allocate_groups", "reshuffle_groups",
     "nominate_group_leader", "view_group_leaders", "resolve_pending_leader", "remove_group_leader",
-    "resolve_reassignments", "create_event",
+    "resolve_reassignments", "create_event", "send_checkin",
 }
 
 # Guards against two allocation runs (each ~10-15 seconds) overlapping
@@ -367,6 +372,11 @@ def _confirmation_text(action, whatsapp_id):
             f"You've been asked to lead a Bible Study group in "
             f"{member['pending_leader_area']}. Reply YES to accept, or NO to decline."
         )
+    if action == "send_checkin":
+        activity_type = fellowship_checkin.todays_leader_checkin()
+        if activity_type:
+            return _send_checkin_confirmation_text(activity_type)
+        return "Reply YES to send today's check-in, or NO to cancel."
     return CONFIRMATION_QUESTIONS[action]
 
 
@@ -447,6 +457,71 @@ def _handle_update_details(member, text):
         "try saying something like 'I want to update my area'. For other changes, "
         "please contact a leader directly."
     )
+
+
+# ---------------------------------------------------------------------
+# Feedback collection: leader-triggered check-in. The activity is
+# inferred from today's date, never asked, so the wrong day's question
+# can't be sent by mistake; the actual send runs in a background thread
+# (messaging every member takes a while, same reason allocation is
+# backgrounded) and the leader is messaged again once it's done. See
+# fellowship_checkin.py for how this and the 9pm fallback never both
+# go out on the same day.
+# ---------------------------------------------------------------------
+
+_TUESDAY = 1
+
+
+def _send_checkin_confirmation_text(activity_type):
+    return (
+        f"This will ask every registered member whether they were at today's "
+        f"{display_name_for(activity_type)}, and ask anyone who says YES for "
+        "feedback.\n\nReply YES to send it now, or NO to cancel."
+    )
+
+
+def _handle_send_checkin(member, text):
+    activity_type = fellowship_checkin.todays_leader_checkin()
+    if activity_type is None:
+        if date.today().weekday() == _TUESDAY:
+            return (
+                "Tuesday is Bible Study -- attendance there is marked by each group's "
+                "leader instead (they get asked at 9pm), and attendees get the feedback "
+                "question automatically after that."
+            )
+        return "There's no fellowship or service to check in for today."
+
+    if fellowship_checkin.checkin_already_sent_today(activity_type):
+        return (
+            f"The check-in for today's {display_name_for(activity_type)} has already "
+            "gone out -- members can already reply to it."
+        )
+
+    set_pending_action(member["whatsapp_id"], "send_checkin")
+    return _send_checkin_confirmation_text(activity_type)
+
+
+def _run_checkin_job(whatsapp_id):
+    try:
+        activity_type, sent = fellowship_checkin.send_leader_checkin()
+        if activity_type is None:
+            summary = "There's no fellowship or service to check in for today, so nothing was sent."
+        elif sent is None:
+            summary = f"The check-in for today's {display_name_for(activity_type)} had already gone out, so I didn't send it again."
+        else:
+            summary = f"Done -- sent the {display_name_for(activity_type)} check-in to {sent} member(s)."
+    except Exception as e:
+        summary = f"Something went wrong sending the check-in: {e}"
+    send_whatsapp_message(whatsapp_id, summary)
+
+
+def _handle_feedback_response(member, text):
+    """
+    Feedback nobody asked for -- recorded and safety-checked the same
+    way as prompted feedback, but kept out of the response-rate figure.
+    See feedback.record_unprompted_feedback.
+    """
+    return feedback.record_unprompted_feedback(member["whatsapp_id"], member["reg_number"], text)
 
 
 def _handle_request_human(member, text):
@@ -654,6 +729,9 @@ def handle_pending_action_response(whatsapp_id, text):
         )
     elif action in ("allocate_groups", "reshuffle_groups"):
         return _start_allocation_job(whatsapp_id, action)
+    elif action == "send_checkin":
+        threading.Thread(target=_run_checkin_job, args=(whatsapp_id,), daemon=True).start()
+        return "Sending it now -- I'll message you once it's gone out."
 
     return "Something went wrong processing that -- please try again."
 
@@ -715,7 +793,7 @@ _STUB_HANDLERS = {
     "event_rsvp": _handle_event_rsvp,
     "create_event": _handle_create_event,
     "checkin_response": _handle_stub("Check-in handling"),
-    "feedback_response": _handle_stub("Feedback collection"),
+    "feedback_response": _handle_feedback_response,
     "purchase_study_guide": _handle_stub("Study guide payments"),
     "update_details": _handle_update_details,
     "unsubscribe_followup": _handle_unsubscribe_followup,
@@ -733,5 +811,6 @@ _STUB_HANDLERS = {
     "resolve_pending_leader": _handle_resolve_pending_leader,
     "remove_group_leader": _handle_remove_group_leader,
     "resolve_reassignments": _handle_resolve_reassignments,
+    "send_checkin": _handle_send_checkin,
     "unclear": _handle_unclear,
 }

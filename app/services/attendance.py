@@ -7,6 +7,11 @@ Reason capture itself (classification, the distress safety-net) is
 shared machinery -- see reason_capture.py -- since the open-fellowship
 slice (fellowship_checkin.py) needs the exact same thing.
 
+Feedback collection extends the marking reply: once a leader has said
+who was absent, everyone else on the roster is known to have attended
+(the same leader-confirmed attendance the bandit relies on), so they
+get the feedback question -- see feedback.py.
+
 Deliberately Bible-Study-only for now -- see PROJECT_LOG.md's
 Objective 3 entry for how this and the open-fellowship slice share the
 same `absences` table without sharing everything else.
@@ -23,6 +28,7 @@ from app.models.pending_attendance_marking import (
 from app.models.absence import create_absence
 from app.services.whatsapp_client import send_whatsapp_message
 from app.services import reason_capture
+from app.services import feedback
 
 ACTIVITY_TYPE_BIBLE_STUDY = "bible_study"
 
@@ -73,7 +79,8 @@ def handle_attendance_marking_message(whatsapp_id, message_text):
 
     if text.lower() == "none":
         delete_pending_attendance_marking(whatsapp_id)
-        return "Thanks -- noted that everyone attended."
+        asked = _send_feedback_to_attendees(roster, activity_date)
+        return f"Thanks -- noted that everyone attended.{_feedback_note(asked)}"
 
     numbers = [n.strip() for n in text.split(",")]
     if not numbers or not all(n.isdigit() and 1 <= int(n) <= len(roster) for n in numbers):
@@ -95,13 +102,48 @@ def handle_attendance_marking_message(whatsapp_id, message_text):
         else:
             unreachable.append(member["name"])
 
+    absent_reg_numbers = {m["reg_number"] for m in absent_members}
+    attendees = [m for m in roster if m["reg_number"] not in absent_reg_numbers]
+    asked = _send_feedback_to_attendees(attendees, activity_date)
+
     all_names = ", ".join(m["name"] for m in absent_members)
     reply = f"Got it -- marked {all_names} as absent."
     if reached:
         reply += f" Reached out directly to: {', '.join(reached)}."
     if unreachable:
         reply += f" No WhatsApp number on file for: {', '.join(unreachable)} -- couldn't reach them."
+    reply += _feedback_note(asked)
     return reply
+
+
+def _feedback_note(asked):
+    """Tells the leader how many attendees were actually asked for feedback -- honestly, 0 included."""
+    if asked == 0:
+        return ""
+    return f" Also sent a quick feedback question to the {asked} who attended."
+
+
+def _send_feedback_to_attendees(attendees, activity_date):
+    """
+    Sends directly (the attendees are DIFFERENT people from the leader
+    replying in this webhook turn), and only records a feedback request
+    once the send actually succeeded -- a failed send must never count
+    as a request that went unanswered, or it would drag the response
+    rate down for the wrong reason. Returns how many were asked.
+    """
+    asked = 0
+    for member in attendees:
+        if not member["whatsapp_id"]:
+            continue
+        message = feedback.build_feedback_prompt("Bible Study", member["name"])
+        response = send_whatsapp_message(member["whatsapp_id"], message)
+        if response.status_code == 200:
+            feedback.begin_feedback(
+                member["whatsapp_id"], member["reg_number"],
+                ACTIVITY_TYPE_BIBLE_STUDY, activity_date, "bible_study",
+            )
+            asked += 1
+    return asked
 
 
 def _start_reason_capture(whatsapp_id, absence_id, name):

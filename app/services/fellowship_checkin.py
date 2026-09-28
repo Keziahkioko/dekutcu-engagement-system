@@ -8,18 +8,36 @@ roster -- "absence" only makes sense relative to a dynamically
 inferred "regular attendee" population, built from a rolling
 check-in history, not a pre-registered list.
 
-Two scheduled triggers (see scheduler.py):
-  - 9pm each day: broadcast a check-in question to every data
-    -consenting, contactable member.
-  - Noon, every day: sweep any check-in question still unanswered
-    from the day before. ONLY members who were already a "regular"
-    for that specific weekday (checked in for 2 of their last 3
-    occurrences of it) get treated as having lapsed; anyone else is
-    just cleared with no follow-up, since we never had grounds to
-    expect them in the first place.
+How the "were you there?" check-in goes out (feedback collection
+extended this -- it used to be 9pm only):
+  - LEADER-TRIGGERED, preferred: a leader texts the bot near the end
+    of the session and the check-in goes out right then, while people
+    are still in the room -- fresher answers, and fresher feedback
+    after a YES (see feedback.py). Works any day except Tuesday (Bible
+    Study uses the group leaders' own absence marking instead) and
+    Saturday (nothing runs).
+  - 9pm FALLBACK: the original scheduled check-in still runs for each
+    tracked fellowship day, but only if no leader already sent one
+    that day -- e.g. the fellowship was somewhere without wifi, or the
+    leader forgot. checkin_broadcasts' UNIQUE constraint guarantees
+    only one of the two ever goes out, even if they race.
+  - Noon, every day: sweep any check-in still unanswered from the day
+    before. ONLY members who were already a "regular" for that
+    specific weekday (checked in for 2 of their last 3 occurrences of
+    it) get treated as having lapsed; anyone else is just cleared,
+    since we never had grounds to expect them in the first place.
+
+Sunday service is deliberately different -- leader-triggered only, no
+9pm fallback, and FEEDBACK ONLY: a YES gets the feedback question, but
+a NO never creates an absence, never starts reason capture, and never
+reaches the bandit. The proposal explicitly excludes Sunday service
+from individual follow-up ("individual follow-up expectations do not
+apply"), and asking who attended to collect feedback doesn't change
+that.
 
 Live replies are handled immediately, never batched:
-  - "yes" (or a close variant) -- check-in recorded, done.
+  - "yes" (or a close variant) -- check-in recorded, then the feedback
+    question in the same reply.
   - a bare "no" with no reason attached -- absence recorded right
     away, then handed to the SAME reason-capture flow Bible Study
     uses (reason_capture.py) to ask why, live, in the same turn.
@@ -40,22 +58,33 @@ from app.models.pending_fellowship_checkin import (
     delete_pending_fellowship_checkin,
     get_stale_pending_checkins,
 )
+from app.models.checkin_broadcast import claim_checkin_broadcast, get_checkin_broadcast
 from app.services.whatsapp_client import send_whatsapp_message
+from app.services.message_generator import display_name_for
 from app.services import reason_capture
+from app.services import feedback
 
 # weekday: Python's date.weekday() convention (Monday=0 ... Sunday=6).
 # Wednesday is specifically prayers, confirmed directly rather than
 # assumed generic "fellowship" -- the other three don't have a
 # confirmed specific theme, so they stay generically named.
 _DAYS = {
-    0: ("monday_fellowship", "Monday Fellowship"),
-    2: ("wednesday_prayers", "Wednesday Prayers"),
-    3: ("thursday_fellowship", "Thursday Fellowship"),
-    4: ("friday_fellowship", "Friday Fellowship"),
+    0: "monday_fellowship",
+    2: "wednesday_prayers",
+    3: "thursday_fellowship",
+    4: "friday_fellowship",
 }
 
+# Leader-triggerable, but NOT tracked -- see module docstring.
+_UNTRACKED_DAYS = {
+    6: "sunday_service",
+}
+
+_TRACKED_ACTIVITIES = set(_DAYS.values())
+
 # Public -- so app/__init__.py can register the 9pm task for each
-# tracked day without reaching into _DAYS directly.
+# tracked day without reaching into _DAYS directly. Sunday is
+# deliberately NOT here: no 9pm fallback for it.
 TRACKED_WEEKDAYS = list(_DAYS.keys())
 
 _YES_VARIANTS = {"yes", "yeah", "yep", "yup"}
@@ -73,20 +102,53 @@ def _today():
     return date.today()
 
 
+def _activity_for_weekday(weekday):
+    return _DAYS.get(weekday) or _UNTRACKED_DAYS.get(weekday)
+
+
 def _reg_number_for(whatsapp_id):
     member = get_member_by_whatsapp_id(whatsapp_id)
     return member["reg_number"] if member else None
 
 
-def send_fellowship_checkin(weekday):
+def todays_leader_checkin():
     """
-    The scheduled 9pm task for one specific day -- registered once per
-    applicable weekday in app/__init__.py.
+    What a leader-triggered check-in would be for today: the
+    activity_type, or None if nothing leader-triggerable runs today
+    (Tuesday -- Bible Study has its own marking flow -- or Saturday).
+    Inferred from today's date rather than asked, so a leader can't
+    accidentally send the wrong day's question.
     """
-    activity_type, display_name = _DAYS[weekday]
+    return _activity_for_weekday(_today().weekday())
+
+
+def checkin_already_sent_today(activity_type):
+    return get_checkin_broadcast(activity_type, _today()) is not None
+
+
+def send_fellowship_checkin(weekday, triggered_by="scheduled"):
+    """
+    Sends today's "were you there?" check-in for `weekday`'s activity
+    to every data-consenting, contactable member. Called by the 9pm
+    schedule (triggered_by="scheduled", registered once per tracked
+    weekday in app/__init__.py) and by a leader's confirmed request
+    (triggered_by="leader").
+
+    Returns how many members it was sent to, or None if a check-in for
+    this activity already went out today -- claimed atomically first,
+    so the 9pm fallback and a leader trigger can never both send.
+    """
+    activity_type = _activity_for_weekday(weekday)
+    today = _today()
+
+    if not claim_checkin_broadcast(activity_type, today, triggered_by, _now()):
+        return None
+
+    display_name = display_name_for(activity_type)
     members = get_data_consenting_members()
     contactable = [m for m in members if m["whatsapp_id"]]
 
+    sent = 0
     for member in contactable:
         message = (
             f"Were you at {display_name} today? Reply YES if you were there, "
@@ -94,7 +156,23 @@ def send_fellowship_checkin(weekday):
         )
         response = send_whatsapp_message(member["whatsapp_id"], message)
         if response.status_code == 200:
-            start_pending_fellowship_checkin(member["whatsapp_id"], activity_type, _today(), _now())
+            start_pending_fellowship_checkin(member["whatsapp_id"], activity_type, today, _now())
+            sent += 1
+    return sent
+
+
+def send_leader_checkin():
+    """
+    A leader's confirmed request (see intent_router.py's send_checkin)
+    -- sends today's check-in right now. Returns (activity_type, sent):
+    activity_type is None if nothing leader-triggerable runs today;
+    sent is None if a check-in for today already went out.
+    """
+    weekday = _today().weekday()
+    activity_type = _activity_for_weekday(weekday)
+    if activity_type is None:
+        return None, None
+    return activity_type, send_fellowship_checkin(weekday, triggered_by="leader")
 
 
 def handle_checkin_message(whatsapp_id, message_text):
@@ -104,18 +182,26 @@ def handle_checkin_message(whatsapp_id, message_text):
 
     activity_type = pending["activity_type"]
     checkin_date = pending["checkin_date"]
-    weekday = checkin_date.weekday()
-    display_name = _DAYS[weekday][1]
+    display_name = display_name_for(activity_type)
     text = message_text.strip()
     lowered = text.lower().rstrip(".")
 
     delete_pending_fellowship_checkin(whatsapp_id)
-    reg_number = _reg_number_for(whatsapp_id)
+    member = get_member_by_whatsapp_id(whatsapp_id)
+    reg_number = member["reg_number"] if member else None
 
     if lowered in _YES_VARIANTS:
-        if reg_number:
-            record_checkin(reg_number, activity_type, checkin_date, _now())
-        return "Thanks for letting us know!"
+        if not reg_number:
+            return "Thanks for letting us know!"
+        record_checkin(reg_number, activity_type, checkin_date, _now())
+        broadcast = get_checkin_broadcast(activity_type, checkin_date)
+        trigger = broadcast["triggered_by"] if broadcast else "scheduled"
+        feedback.begin_feedback(whatsapp_id, reg_number, activity_type, checkin_date, trigger)
+        return feedback.build_feedback_prompt(display_name, member["name"])
+
+    if activity_type not in _TRACKED_ACTIVITIES:
+        # Sunday service -- feedback-only, never an absence. See module docstring.
+        return "Thanks for letting us know -- hope to see you next time!"
 
     if not reg_number:
         return "Thanks for letting us know."
@@ -164,7 +250,9 @@ def process_stale_checkins():
     """
     The scheduled daily-noon task -- sweeps any pending_fellowship_checkin
     row sent on an earlier calendar day, still unanswered. Only members
-    already a "regular" for that specific day get treated as lapsed.
+    already a "regular" for that specific day get treated as lapsed,
+    and never for an untracked activity (Sunday service) -- silence
+    there is just cleared.
     """
     for row in get_stale_pending_checkins():
         whatsapp_id = row["whatsapp_id"]
@@ -174,13 +262,15 @@ def process_stale_checkins():
 
         delete_pending_fellowship_checkin(whatsapp_id)
 
+        if activity_type not in _TRACKED_ACTIVITIES:
+            continue
+
         reg_number = _reg_number_for(whatsapp_id)
         if not reg_number or not is_regular(reg_number, activity_type, weekday, checkin_date):
             continue
 
         absence_id = create_absence(reg_number, activity_type, checkin_date, _now())
-        display_name = _DAYS[weekday][1]
-        message = reason_capture.build_reason_prompt(display_name)
+        message = reason_capture.build_reason_prompt(display_name_for(activity_type))
         response = send_whatsapp_message(whatsapp_id, message)
         if response.status_code == 200:
             reason_capture.begin_reason_capture(whatsapp_id, absence_id)
