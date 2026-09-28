@@ -79,6 +79,7 @@ from app.services import event_manager
 from app.services import escalation
 from app.services import fellowship_checkin
 from app.services import feedback
+from app.services import rag_companion
 from app.services.message_generator import display_name_for
 from app.services.group_query import answer_group_question
 from app.services.llm_client import create_chat_completion
@@ -91,6 +92,7 @@ RESUME_KEYWORDS = {"resume"}
 INTENT_DEFINITIONS = {
     "greeting_smalltalk": "Casual greeting, small talk, thanks, or chit-chat with no specific request.",
     "general_question": "A general question about the organization, its beliefs, or its activities -- NOT about specific Bible study groups, group leaders, or group membership. Even a short follow-up like 'what about X' or 'and Y?' belongs to group_query instead if the conversation was just discussing groups/leaders/membership -- don't default here just because the message doesn't say the word 'group'.",
+    "pastoral_question": "A personal or pastoral question about the member's OWN spiritual life, relationships, struggles or a decision they face, asking for guidance rather than information (e.g. 'I keep falling into the same sin, what should I do?', 'should I leave my church?') -- WITHOUT signs of real distress or crisis (that is needs_support).",
     "list_events": "Asking what events or activities are coming up -- a read-only question, NOT wanting to RSVP.",
     "event_rsvp": "Wanting to RSVP (yes/no/maybe) to a specific upcoming event -- NOT just asking what's coming up.",
     "create_event": "A leader wanting to create/announce a new event (Bible Study, cell group, fellowship, or a broadcast-only gathering like Sunday service).",
@@ -571,6 +573,21 @@ def _run_checkin_job(whatsapp_id):
     send_whatsapp_message(whatsapp_id, summary)
 
 
+def _handle_general_question(member, text):
+    """Stage 12: answered from DeKUTCU's own materials, with citations -- see rag_companion.py."""
+    return rag_companion.answer_question(member, text, pastoral=False)
+
+
+def _handle_pastoral_question(member, text):
+    """
+    Stage 12: a personal question is ANSWERED from the materials (never
+    with personal directives) AND always followed by a consent-first
+    offer of a leader -- a deliberate, logged departure from the
+    proposal's "route rather than answer" wording. See PROJECT_LOG.md.
+    """
+    return rag_companion.answer_question(member, text, pastoral=True)
+
+
 def _handle_feedback_response(member, text):
     """
     Feedback nobody asked for -- recorded and safety-checked the same
@@ -839,7 +856,8 @@ def _handle_stub(feature_name):
 
 _STUB_HANDLERS = {
     "greeting_smalltalk": lambda member, text: f"Hey {member['name'].split()[0]}! How can I help?",
-    "general_question": _handle_stub("Answering general questions"),
+    "general_question": _handle_general_question,
+    "pastoral_question": _handle_pastoral_question,
     "list_events": _handle_list_events,
     "event_rsvp": _handle_event_rsvp,
     "create_event": _handle_create_event,

@@ -21,6 +21,15 @@ costs far less than missing someone who actually needed help.
 request_human is NOT part of this severity logic -- explicitly asking
 to talk to a person already IS the consent, so it always escalates
 directly (escalate_now), no question asked first.
+
+Stage 12 adds a softer third kind: a leader OFFER (start_leader_offer)
+after a RAG answer to a pastoral question, or when DeKUTCU's materials
+don't cover something. Same consent-first rule -- a leader only on YES
+-- but deliberately NOT insistent: any reply other than YES/NO quietly
+drops the offer and handle_consent_reply returns None, so the message
+is handled normally (e.g. the member just asks another question). The
+distress question keeps its strict YES/NO re-ask; a casual offer must
+never trap someone into "Please reply YES or NO".
 """
 
 import json
@@ -106,9 +115,9 @@ def _notify_leaders(member, trigger_type, context_text, urgency_label):
     return targets
 
 
-def escalate_now(member, trigger_type, context_text):
-    """For request_human, and for a distress escalation the member has already consented to."""
-    targets = _notify_leaders(member, trigger_type, context_text, "may need some support")
+def escalate_now(member, trigger_type, context_text, urgency_label="may need some support"):
+    """For request_human, a distress escalation the member has consented to, or an accepted leader offer."""
+    targets = _notify_leaders(member, trigger_type, context_text, urgency_label)
     if targets:
         leader_name = targets[0][1] if len(targets) == 1 else "a leader"
         return f"I've let {leader_name} know -- they'll reach out to you soon."
@@ -146,19 +155,50 @@ def start_consent_flow(whatsapp_id, trigger_type, context_text):
     )
 
 
+OFFER_TRIGGERS = {"pastoral_question", "rag_not_covered", "rag_secondary_issue"}
+
+OFFER_TEXT = "Would you like one of your leaders to reach out to you personally? Reply YES or NO."
+
+
+def start_leader_offer(whatsapp_id, trigger_type, context_text):
+    """
+    The soft offer -- see module docstring. Persists the pending
+    question and returns the offer text for the caller to append to its
+    reply. trigger_type must be one of OFFER_TRIGGERS, which is what
+    makes handle_consent_reply treat it as an offer rather than the
+    strict distress question.
+    """
+    assert trigger_type in OFFER_TRIGGERS
+    start_pending_escalation_consent(whatsapp_id, trigger_type, context_text, _now())
+    return OFFER_TEXT
+
+
 def handle_consent_reply(whatsapp_id, message_text):
+    """
+    Returns the reply -- or None for an OFFER that got neither YES nor
+    NO: the offer is dropped and webhook.py handles the message
+    normally instead. The strict distress question re-asks.
+    """
     pending = get_pending_escalation_consent(whatsapp_id)
     if pending is None:
         return "Something went wrong on my end -- please message me again."
 
-    answer = message_text.strip().lower()
+    is_offer = pending["trigger_type"] in OFFER_TRIGGERS
+    answer = message_text.strip().lower().rstrip(".!")
     if answer not in ("yes", "no"):
+        if is_offer:
+            delete_pending_escalation_consent(whatsapp_id)
+            return None
         return "Please reply YES or NO."
 
     delete_pending_escalation_consent(whatsapp_id)
 
     if answer == "no":
+        if is_offer:
+            return "No problem!"
         return "No problem -- please know you can always reach out anytime if that changes."
 
     member = get_member_by_whatsapp_id(whatsapp_id)
+    if is_offer:
+        return escalate_now(member, pending["trigger_type"], pending["context_text"], "would like a leader to reach out to them")
     return escalate_now(member, pending["trigger_type"], pending["context_text"])

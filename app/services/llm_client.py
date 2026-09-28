@@ -58,13 +58,20 @@ def _call_with_retry(client, **kwargs):
             time.sleep(_BASE_DELAY_SECONDS * (2 ** attempt))
 
 
-def create_chat_completion(**kwargs):
+def create_chat_completion(model=GROQ_MODEL, **kwargs):
+    """
+    `model` defaults to GROQ_MODEL (gpt-oss-20b) -- every existing caller
+    is unaffected. Stage 12's RAG answers pass openai/gpt-oss-120b
+    instead: Groq's free daily limits are separate PER MODEL (verified,
+    see PROJECT_LOG.md), so RAG draws on its own allowance and can never
+    drain the budget the classifier needs for every incoming message.
+    """
     groq_key = os.getenv("GROQ_API_KEY")
     groq_error = None
 
     if groq_key:
         try:
-            return _call_with_retry(Groq(api_key=groq_key), model=GROQ_MODEL, **kwargs)
+            return _call_with_retry(Groq(api_key=groq_key), model=model, **kwargs)
         except _RATE_LIMIT_ERRORS as e:
             groq_error = e
             print(f"Groq unavailable after retries, checking fallback provider: {e}")

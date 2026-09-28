@@ -17,7 +17,19 @@ No vector index (HNSW/IVFFlat): with ~100 chunks an exact scan of every
 row is instant and exactly correct, while an approximate index would
 trade exactness for speed this corpus size doesn't need. Worth adding
 only if the corpus grows into the thousands.
+
+  - rag_queries: one row per question the companion handled -- the
+    evaluation record for the proposal's three RAG metrics. `retrieved`
+    (every chunk passed to the model, with its similarity) supports
+    retrieval relevance; `answer` + `cited` support groundedness and
+    citation accuracy; `invalid_citations` counts passage numbers the
+    model gave that didn't exist (caught in code, never shown).
+    `outcome` is one of answered / not_covered / secondary_issue /
+    escalated / error. `tokens_used` backs the budget claims with real
+    numbers rather than estimates.
 """
+
+import json
 
 from app.database import get_connection
 
@@ -44,6 +56,22 @@ def init_rag_tables():
             citation TEXT NOT NULL,
             content TEXT NOT NULL,
             embedding vector({EMBEDDING_DIMENSIONS}) NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS rag_queries (
+            id SERIAL PRIMARY KEY,
+            reg_number TEXT,
+            question TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            severity TEXT,
+            retrieved JSONB,
+            outcome TEXT NOT NULL,
+            answer TEXT,
+            cited JSONB,
+            invalid_citations INTEGER DEFAULT 0,
+            tokens_used INTEGER,
+            created_at TIMESTAMP
         )
     """)
     conn.commit()
@@ -85,6 +113,38 @@ def replace_document(title, tier, source, added_at, chunks):
         cursor.close()
         conn.close()
     return document_id
+
+
+def log_query(reg_number, question, kind, severity, retrieved, outcome, answer, cited,
+              invalid_citations, tokens_used, created_at):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO rag_queries (reg_number, question, kind, severity, retrieved, outcome,
+                                 answer, cited, invalid_citations, tokens_used, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (reg_number, question, kind, severity, json.dumps(retrieved), outcome,
+          answer, json.dumps(cited), invalid_citations, tokens_used, created_at))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def chunks_with_citation_prefix(prefix):
+    """Every chunk whose citation starts with `prefix`, in document order -- e.g. all of Art. 11 for small-to-big retrieval."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT c.id, c.citation, c.content, d.title, d.tier, NULL::float AS similarity
+        FROM rag_chunks c
+        JOIN rag_documents d ON d.id = c.document_id
+        WHERE c.citation LIKE %s
+        ORDER BY c.id
+    """, (prefix.replace("%", r"\%").replace("_", r"\_") + "%",))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
 
 
 def nearest_chunks(query_embedding, limit):

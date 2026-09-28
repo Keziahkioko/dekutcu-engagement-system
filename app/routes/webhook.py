@@ -226,7 +226,11 @@ def route_incoming_message(sender_number, message_text):
         if get_pending_reason_capture(sender_number) is not None:
             return reason_capture.handle_reason_capture_message(sender_number, message_text)
         if get_pending_escalation_consent(sender_number) is not None:
-            return escalation.handle_consent_reply(sender_number, message_text)
+            # A soft leader OFFER (Stage 12) returns None for anything but
+            # YES/NO -- the offer is dropped and the message routed normally.
+            reply = escalation.handle_consent_reply(sender_number, message_text)
+            if reply is not None:
+                return reply
         if get_pending_feedback(sender_number) is not None:
             # Unlike every other pending flow, this one can decline the
             # message (expired, or not actually feedback -- see
