@@ -106,11 +106,6 @@ def _activity_for_weekday(weekday):
     return _DAYS.get(weekday) or _UNTRACKED_DAYS.get(weekday)
 
 
-def _reg_number_for(whatsapp_id):
-    member = get_member_by_whatsapp_id(whatsapp_id)
-    return member["reg_number"] if member else None
-
-
 def todays_leader_checkin():
     """
     What a leader-triggered check-in would be for today: the
@@ -146,7 +141,9 @@ def send_fellowship_checkin(weekday, triggered_by="scheduled"):
 
     display_name = display_name_for(activity_type)
     members = get_data_consenting_members()
-    contactable = [m for m in members if m["whatsapp_id"]]
+    # followup_consent too, not just data_consent -- a member who texted
+    # STOP was promised no more check-ins, and this IS one.
+    contactable = [m for m in members if m["whatsapp_id"] and m["followup_consent"]]
 
     sent = 0
     for member in contactable:
@@ -265,11 +262,16 @@ def process_stale_checkins():
         if activity_type not in _TRACKED_ACTIVITIES:
             continue
 
-        reg_number = _reg_number_for(whatsapp_id)
-        if not reg_number or not is_regular(reg_number, activity_type, weekday, checkin_date):
+        member = get_member_by_whatsapp_id(whatsapp_id)
+        if not member or not is_regular(member["reg_number"], activity_type, weekday, checkin_date):
             continue
 
-        absence_id = create_absence(reg_number, activity_type, checkin_date, _now())
+        # The absence is real attendance data either way; only the
+        # "why did you miss it?" message depends on follow-up consent
+        # (they may have texted STOP after the check-in went out).
+        absence_id = create_absence(member["reg_number"], activity_type, checkin_date, _now())
+        if not member["followup_consent"]:
+            continue
         message = reason_capture.build_reason_prompt(display_name_for(activity_type))
         response = send_whatsapp_message(whatsapp_id, message)
         if response.status_code == 200:

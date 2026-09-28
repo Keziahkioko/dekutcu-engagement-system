@@ -61,6 +61,9 @@ from app.models.member import (
     get_leader_status,
 )
 from app.models.pending_action import set_pending_action, get_pending_action, clear_pending_action
+from app.models.pending_fellowship_checkin import delete_pending_fellowship_checkin
+from app.models.pending_reason_capture import delete_pending_reason_capture
+from app.models.pending_feedback import delete_pending_feedback
 from app.models.conversation_history import (
     get_recent_conversation,
     log_conversation_message,
@@ -247,11 +250,64 @@ def set_followup_consent(whatsapp_id, value):
     conn.close()
 
 
+def opt_out_of_followup(whatsapp_id):
+    """
+    Everything opting out of follow-up check-ins means, in one place --
+    shared by the global STOP keyword (webhook.py) and the confirmed
+    unsubscribe_followup intent, so the two can never drift apart:
+      - followup_consent off (data_consent untouched -- still a fully
+        registered member, absences still recorded).
+      - Any open check-in question closed (were-you-there, why-did-you-
+        miss-it, feedback) -- otherwise their very next message would
+        still be read as a reply to a check-in they just opted out of.
+      - Their leader told ONCE, on the switch from opted-in to opted-out
+        (so a repeat STOP doesn't re-notify): if the bot stops following
+        up, a person should know, so nobody silently drops off. Same
+        "which leader" rule as Stage 11 escalation. A leader opting out
+        themselves is never notified about their own opt-out.
+      - The member is told their leader was notified -- same
+        transparency principle as Stage 11: the bot never contacts a
+        leader about someone without saying so.
+    Returns the reply text.
+    """
+    member = get_member_by_whatsapp_id(whatsapp_id)
+    was_opted_in = bool(member and member["followup_consent"])
+
+    set_followup_consent(whatsapp_id, False)
+    delete_pending_fellowship_checkin(whatsapp_id)
+    delete_pending_reason_capture(whatsapp_id)
+    delete_pending_feedback(whatsapp_id)
+
+    notified = []
+    if was_opted_in:
+        for leader_whatsapp_id, leader_name, _ in escalation.find_target_leaders(member):
+            if leader_whatsapp_id == whatsapp_id:
+                continue
+            send_whatsapp_message(
+                leader_whatsapp_id,
+                f"{member['name']} has opted out of the bot's automatic check-ins. "
+                "They're still a registered member -- you may want to stay in touch "
+                "with them personally.",
+            )
+            notified.append(leader_name)
+
+    reply = (
+        "You won't receive follow-up check-ins anymore. You're still a fully "
+        "registered member -- reply 'resume' anytime if you change your mind."
+    )
+    if notified:
+        who = notified[0] if len(notified) == 1 else "your leaders"
+        reply += f"\n\nI've let {who} know, so they can stay in touch with you personally."
+    return reply
+
+
 CONFIRMATION_QUESTIONS = {
     "unsubscribe_followup": (
         "Just to confirm: you'll stop receiving follow-up check-ins if you "
         "miss Bible study, fellowships, or events. You'll still be a fully "
-        "registered member -- this only affects check-ins, nothing else.\n\n"
+        "registered member -- this only affects check-ins, nothing else. "
+        "Your group leader will be let know, so they can stay in touch "
+        "with you personally.\n\n"
         "Reply YES to confirm, or NO to cancel."
     ),
     "resume_followup": (
@@ -711,12 +767,7 @@ def handle_pending_action_response(whatsapp_id, text):
         return "No problem, nothing has changed."
 
     if action == "unsubscribe_followup":
-        set_followup_consent(whatsapp_id, False)
-        return (
-            "You won't receive follow-up check-ins anymore. You're still "
-            "a fully registered member -- reply 'resume' anytime if you "
-            "change your mind."
-        )
+        return opt_out_of_followup(whatsapp_id)
     elif action == "resume_followup":
         set_followup_consent(whatsapp_id, True)
         return "Great, follow-up check-ins are back on."

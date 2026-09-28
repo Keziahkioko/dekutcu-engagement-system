@@ -73,13 +73,15 @@ def assess_severity(text):
         return "distress"
 
 
-def _find_target_leaders(member):
+def find_target_leaders(member):
     """
     The member's own Bible Study group leader if they're placed and
     matched to one, otherwise every exec leader as a fallback (for
     members not yet in a group). Returns a list of (whatsapp_id, name,
     reg_number) tuples -- usually one, but every exec leader if there's
-    no specific match.
+    no specific match. Public -- also used by the STOP opt-out notice
+    (intent_router.opt_out_of_followup), so "which leader hears about
+    this member" is decided in exactly one place.
     """
     if member.get("group_label"):
         leader = get_leader_of_group(member["group_label"])
@@ -93,7 +95,7 @@ def _find_target_leaders(member):
 
 
 def _notify_leaders(member, trigger_type, context_text, urgency_label):
-    targets = _find_target_leaders(member)
+    targets = find_target_leaders(member)
     for whatsapp_id, name, leader_reg_number in targets:
         notification = f"{member['name']} {urgency_label}"
         if context_text:

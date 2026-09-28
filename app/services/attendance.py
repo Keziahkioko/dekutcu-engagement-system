@@ -93,14 +93,21 @@ def handle_attendance_marking_message(whatsapp_id, message_text):
     absent_members = [roster[int(n) - 1] for n in numbers]
     delete_pending_attendance_marking(whatsapp_id)
 
-    reached, unreachable = [], []
+    # The absence is always recorded -- attendance/membership status
+    # never depends on follow-up consent. Only the "why did you miss
+    # it?" message does: a member who texted STOP was promised no more
+    # check-ins, and the leader is told so rather than it looking like
+    # they were reached.
+    reached, unreachable, opted_out = [], [], []
     for member in absent_members:
         absence_id = create_absence(member["reg_number"], ACTIVITY_TYPE_BIBLE_STUDY, activity_date, _now())
-        if member["whatsapp_id"]:
+        if not member["whatsapp_id"]:
+            unreachable.append(member["name"])
+        elif not member["followup_consent"]:
+            opted_out.append(member["name"])
+        else:
             _start_reason_capture(member["whatsapp_id"], absence_id, member["name"])
             reached.append(member["name"])
-        else:
-            unreachable.append(member["name"])
 
     absent_reg_numbers = {m["reg_number"] for m in absent_members}
     attendees = [m for m in roster if m["reg_number"] not in absent_reg_numbers]
@@ -112,6 +119,11 @@ def handle_attendance_marking_message(whatsapp_id, message_text):
         reply += f" Reached out directly to: {', '.join(reached)}."
     if unreachable:
         reply += f" No WhatsApp number on file for: {', '.join(unreachable)} -- couldn't reach them."
+    if opted_out:
+        reply += (
+            f" Didn't message {', '.join(opted_out)} -- they've opted out of check-ins, "
+            "so you may want to reach out personally."
+        )
     reply += _feedback_note(asked)
     return reply
 
@@ -133,7 +145,7 @@ def _send_feedback_to_attendees(attendees, activity_date):
     """
     asked = 0
     for member in attendees:
-        if not member["whatsapp_id"]:
+        if not member["whatsapp_id"] or not member["followup_consent"]:
             continue
         message = feedback.build_feedback_prompt("Bible Study", member["name"])
         response = send_whatsapp_message(member["whatsapp_id"], message)

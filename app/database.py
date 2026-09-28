@@ -33,9 +33,25 @@ use exactly as before (cursor(), commit(), and importantly close())
 -- close() here returns the connection to the pool rather than really
 closing it, so none of the ~10 files already calling get_connection()
 needed to change.
+
+Stale connections (fixed 2026-09-28): Neon's free tier suspends the
+database after a few minutes idle and drops every open connection. The
+pool had no way to know -- it would hand out a dead connection, and the
+caller's next query failed with "server closed the connection
+unexpectedly" (seen three times in local testing). On Render that could
+mean a lost message, or worse a skipped scheduled job after hours of
+quiet, which nothing retries. So get_connection() now checks a
+connection with a tiny SELECT 1 before handing it out -- but ONLY if it
+has sat idle longer than _IDLE_CHECK_SECONDS (or has never been used),
+which is exactly when it could have gone stale. Connections in constant
+use (the message workers poll every half-second) never pay for the
+check. Dead ones are discarded and the pool opens fresh ones in their
+place. close() likewise discards a connection that broke mid-use instead
+of crashing while trying to return it.
 """
 
 import os
+import time
 import threading
 import psycopg2
 from psycopg2 import pool
@@ -43,6 +59,13 @@ from psycopg2.extras import RealDictCursor
 
 _pool = None
 _pool_lock = threading.Lock()
+
+_IDLE_CHECK_SECONDS = 60
+
+# id(connection) -> time.monotonic() it was last returned to the pool.
+# A connection missing from here has never been handed out yet (e.g.
+# pre-warmed at boot and sat unused since), so it gets checked too.
+_last_used = {}
 
 
 def _get_pool():
@@ -94,15 +117,68 @@ class _PooledConnection:
         self._conn.rollback()
 
     def close(self):
-        self._pool.putconn(self._conn)
+        """
+        Returns the connection to the pool -- or, if it broke while in
+        use, discards it instead. Returning a dead connection normally
+        makes the pool attempt a rollback on it, which itself raises;
+        that used to crash inside close() (seen in testing).
+        """
+        if self._conn.closed:
+            _discard(self._pool, self._conn)
+            return
+        try:
+            self._pool.putconn(self._conn)
+            _last_used[id(self._conn)] = time.monotonic()
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
+            _discard(self._pool, self._conn)
+
+
+def _discard(p, real_conn):
+    _last_used.pop(id(real_conn), None)
+    try:
+        p.putconn(real_conn, close=True)
+    except Exception:
+        pass  # already unusable -- nothing more to clean up
+
+
+def _is_alive(real_conn):
+    """
+    Cheap unless the connection has been idle long enough to have
+    possibly gone stale -- see module docstring.
+    """
+    if real_conn.closed:
+        return False
+    last = _last_used.get(id(real_conn))
+    if last is not None and time.monotonic() - last < _IDLE_CHECK_SECONDS:
+        return True
+    try:
+        cur = real_conn.cursor()
+        cur.execute("SELECT 1")
+        cur.close()
+        real_conn.rollback()  # the check opened a transaction -- leave it clean
+        return True
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        return False
 
 
 def get_connection():
     """
-    Borrows a connection from the pool. cursor_factory=RealDictCursor
-    makes rows behave like dictionaries (row["column_name"]), matching
-    how the code was already written against sqlite3.Row.
+    Borrows a connection from the pool, replacing any that have gone
+    stale (see module docstring). cursor_factory=RealDictCursor makes
+    rows behave like dictionaries (row["column_name"]), matching how
+    the code was already written against sqlite3.Row.
+
+    Tries a bounded number of times -- after Neon wakes from sleep,
+    every pooled connection can be dead at once, and each is discarded
+    in turn until a fresh one is opened. If the database is genuinely
+    unreachable, opening that fresh connection raises, which is the
+    correct, loud failure.
     """
     p = _get_pool()
+    for _ in range(p.maxconn + 1):
+        real_conn = p.getconn()
+        if _is_alive(real_conn):
+            return _PooledConnection(real_conn, p)
+        _discard(p, real_conn)
     real_conn = p.getconn()
     return _PooledConnection(real_conn, p)

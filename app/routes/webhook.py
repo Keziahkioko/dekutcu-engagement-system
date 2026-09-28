@@ -40,6 +40,7 @@ from app.services.intent_router import (
     is_stop_message,
     is_resume_message,
     set_followup_consent,
+    opt_out_of_followup,
     handle_pending_action_response,
     handle_message as handle_intent_message,
 )
@@ -244,16 +245,13 @@ def route_incoming_message(sender_number, message_text):
 def _handle_global_stop(sender_number):
     """
     STOP means "stop sending me proactive check-ins" -- it only
-    touches followup_consent. Full data withdrawal is a separate,
-    deliberate action (withdraw_data_consent intent), not a keyword.
+    touches followup_consent (and closes any open check-in question,
+    and tells their leader once -- see opt_out_of_followup). Full data
+    withdrawal is a separate, deliberate action (withdraw_data_consent
+    intent), not a keyword.
     """
     if is_registered(sender_number):
-        set_followup_consent(sender_number, False)
-        return (
-            "You won't receive follow-up check-ins anymore. You're still "
-            "a fully registered member -- reply 'resume' anytime if you "
-            "change your mind."
-        )
+        return opt_out_of_followup(sender_number)
 
     if get_pending_registration(sender_number) is not None:
         delete_pending_registration(sender_number)
