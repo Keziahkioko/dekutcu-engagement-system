@@ -57,6 +57,16 @@ def init_absences_table():
     # Stage 11 addition -- see module docstring for why this replaces
     # shows_distress rather than reusing it.
     cursor.execute("ALTER TABLE absences ADD COLUMN IF NOT EXISTS distress_level TEXT")
+    # Stage 10 (fuller scope) additions -- is_control snapshots whether
+    # this absence's member was in the bandit's static-reminder control
+    # group AT SELECTION TIME (same "snapshot, don't recompute later"
+    # principle as context_key/chosen_arm above). recovered_within_2 is
+    # the proposal's own named evaluation metric (attendance recovery
+    # within 2 sessions of a follow-up) -- a secondary, reporting-only
+    # signal computed alongside `reward` but over a longer window,
+    # never fed back into the live posterior update. See bandit.py.
+    cursor.execute("ALTER TABLE absences ADD COLUMN IF NOT EXISTS is_control BOOLEAN")
+    cursor.execute("ALTER TABLE absences ADD COLUMN IF NOT EXISTS recovered_within_2 BOOLEAN")
     conn.commit()
     cursor.close()
     conn.close()
@@ -159,12 +169,12 @@ def get_last_chosen_arm(reg_number, activity_type):
     return row["chosen_arm"] if row else None
 
 
-def set_chosen_arm(absence_id, context_key, chosen_arm):
+def set_chosen_arm(absence_id, context_key, chosen_arm, is_control):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE absences SET context_key = %s, chosen_arm = %s WHERE id = %s",
-        (context_key, chosen_arm, absence_id)
+        "UPDATE absences SET context_key = %s, chosen_arm = %s, is_control = %s WHERE id = %s",
+        (context_key, chosen_arm, is_control, absence_id)
     )
     conn.commit()
     cursor.close()
@@ -192,6 +202,34 @@ def get_absences_awaiting_reward(cutoff_date):
     cursor.close()
     conn.close()
     return rows
+
+
+def get_absences_awaiting_recovery(cutoff_date):
+    """
+    Every absence whose immediate reward is already known but whose
+    recovered_within_2 (the proposal's own 2-session recovery metric)
+    isn't yet -- i.e. whose SECOND weekly occurrence has already passed
+    cutoff_date.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM absences
+        WHERE reward IS NOT NULL AND recovered_within_2 IS NULL AND activity_date <= %s
+    """, (cutoff_date,))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
+
+
+def set_recovered_within_2(absence_id, recovered):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE absences SET recovered_within_2 = %s WHERE id = %s", (recovered, absence_id))
+    conn.commit()
+    cursor.close()
+    conn.close()
 
 
 def absence_exists_for_date(reg_number, activity_type, activity_date):

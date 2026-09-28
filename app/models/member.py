@@ -120,7 +120,37 @@ def init_members_table():
         ALTER TABLE members
         ADD COLUMN IF NOT EXISTS pending_reassignment TEXT
     """)
+    # Stage 10 addition -- whether this member is held out of the
+    # bandit's adaptive arm selection as part of the proposal's static
+    # -reminder control group. NULL means "not yet assigned"; assigned
+    # lazily, once, the first time this member's absence would go
+    # through bandit.select_arm_for_absence (not backfilled to
+    # everyone up front, since many members may never actually miss
+    # anything, so there'd be no reason to spend the coin flip).
+    cursor.execute("""
+        ALTER TABLE members
+        ADD COLUMN IF NOT EXISTS bandit_control_group BOOLEAN
+    """)
 
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def get_bandit_control_group(reg_number):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT bandit_control_group FROM members WHERE reg_number = %s", (reg_number,))
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return row["bandit_control_group"] if row else None
+
+
+def set_bandit_control_group(reg_number, value):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE members SET bandit_control_group = %s WHERE reg_number = %s", (value, reg_number))
     conn.commit()
     cursor.close()
     conn.close()

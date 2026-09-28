@@ -35,10 +35,11 @@ from app.models.pending_reason_capture import (
     delete_pending_reason_capture,
 )
 from app.models.absence import record_reason, get_absence_by_id
-from app.models.member import get_member_by_whatsapp_id
+from app.models.member import get_member_by_whatsapp_id, get_member_by_reg_number
 from app.services.llm_client import create_chat_completion
 from app.services import bandit
 from app.services import escalation
+from app.services import message_generator
 
 _REASON_CATEGORIES = [
     "scheduling_conflict", "health", "personal_difficulty",
@@ -95,17 +96,26 @@ def classify_reason(text):
 
 def _select_strategy_message(absence_id, reason_category):
     """
-    Stage 8 hook: once a reason is on record, the bandit picks a
-    follow-up strategy and this returns the message for it. Only
-    called for the "none" severity path -- distress/acute_risk replies
-    get their own, more important escalation response instead, and
-    shouldn't also be treated as ordinary bandit-training fodder mixed
-    in with routine re-engagement optimization.
+    Stage 8/9 hook: once a reason is on record, the bandit picks a
+    follow-up strategy (pure math, no API call -- see bandit.py) and
+    message_generator turns that into the actual live-generated text,
+    using the member's own stated reason (absence["reason_raw"], which
+    is None for a 'skip' reply or a silent-lapse absence -- handled by
+    message_generator itself). Only called for the "none" severity
+    path -- distress/acute_risk replies get their own, more important
+    escalation response instead, and shouldn't also be treated as
+    ordinary bandit-training fodder mixed in with routine
+    re-engagement optimization.
     """
     absence = get_absence_by_id(absence_id)
-    return bandit.select_arm_for_absence(
+    arm = bandit.select_arm_for_absence(
         absence_id, absence["reg_number"], absence["activity_type"],
         absence["activity_date"], reason_category,
+    )
+    member = get_member_by_reg_number(absence["reg_number"])
+    member_name = member["name"] if member else None
+    return message_generator.generate_arm_message(
+        arm, absence["activity_type"], absence["reason_raw"], member_name,
     )
 
 
