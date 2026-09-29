@@ -125,7 +125,8 @@ def _whatsapp_format(reply):
     return re.sub(r"\*\*(.+?)\*\*", r"*\1*", reply)
 
 
-def _finalise(reply):
+def finalise_reply(reply):
+    """Public -- also used by the leadership reports (reporting.py): the same invented-contact guard and WhatsApp formatting."""
     if _has_invented_contact(reply):
         return _INVENTED_CONTACT_REPLY
     return _whatsapp_format(reply)
@@ -376,7 +377,7 @@ def answer_group_question(member, message_text):
             reply_message = response.choices[0].message
 
             if not reply_message.tool_calls:
-                return _finalise(reply_message.content or _FALLBACK_MESSAGE)
+                return finalise_reply(reply_message.content or _FALLBACK_MESSAGE)
 
             # Stored as a minimal plain dict, not the SDK's own message
             # object and NOT a full model_dump() -- if a later round in

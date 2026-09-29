@@ -27,7 +27,7 @@ could disagree with each other.
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from app.models.pending_reason_capture import (
     get_pending_reason_capture,
@@ -174,11 +174,68 @@ def classify_and_record(whatsapp_id, absence_id, text):
     return f"Thanks for sharing -- we appreciate you letting us know.\n\n{strategy_message}"
 
 
+_EXPIRY_HOURS = 24
+
+_IS_REASON_SYSTEM_PROMPT = (
+    "A Christian Union member was asked by a WhatsApp bot why they missed an activity. Decide "
+    "whether their reply is answering THAT question -- any reason, however brief (e.g. 'I was sick', "
+    "'had a CAT', 'just tired', 'personal stuff') -- or is instead an unrelated message to the bot "
+    "(e.g. asking for a report, asking about events or their group, a greeting). Respond with ONLY "
+    "a JSON object: {\"is_reason\": true} or {\"is_reason\": false}."
+)
+
+
+def _is_expired(pending):
+    created_at = pending["created_at"]
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - created_at > timedelta(hours=_EXPIRY_HOURS)
+
+
+def _is_reason(text):
+    try:
+        response = create_chat_completion(
+            messages=[{"role": "system", "content": _IS_REASON_SYSTEM_PROMPT},
+                      {"role": "user", "content": text}],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+        return bool(json.loads(response.choices[0].message.content).get("is_reason", True))
+    except Exception as e:
+        # Defaults to True -- the same reasoning as feedback.py: treating an
+        # off-topic message as a reason is a minor data blemish, while the
+        # other way round would skip the safety check below.
+        try:
+            print(f"Reason relevance check failed, treating as a reason: {e}")
+        except UnicodeEncodeError:
+            print("Reason relevance check failed, treating as a reason (error message omitted -- contained non-ASCII characters)")
+        return True
+
+
 def handle_reason_capture_message(whatsapp_id, message_text):
+    """
+    Returns the reply -- or None if this message isn't actually a reason
+    (the question has expired, or the reply is about something else):
+    the question is dropped and webhook.py routes the message normally.
+    The absence itself stays recorded, just without a reason.
+
+    Found in the Stage 13 testing: a member with an open "why did you miss
+    it?" question sent "Show me the attendance report" -- and it was
+    recorded as her absence reason and answered with a follow-up strategy.
+    The same trap feedback questions had; the same fix (Keziah agreed).
+    """
     text = message_text.strip()
     pending = get_pending_reason_capture(whatsapp_id)
     if pending is None:
         return "Something went wrong on my end -- please message me again."
+
+    if _is_expired(pending):
+        delete_pending_reason_capture(whatsapp_id)
+        return None
+
+    if text.lower() != "skip" and not _is_reason(text):
+        delete_pending_reason_capture(whatsapp_id)
+        return None
 
     delete_pending_reason_capture(whatsapp_id)
 

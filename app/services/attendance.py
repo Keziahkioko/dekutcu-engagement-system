@@ -19,7 +19,8 @@ same `absences` table without sharing everything else.
 
 from datetime import datetime, timezone, date
 
-from app.models.member import get_data_consenting_members, get_group_members
+from app.models.member import get_data_consenting_members, get_group_members, get_member_by_whatsapp_id
+from app.models.attendance_marking import record_marking
 from app.models.pending_attendance_marking import (
     get_pending_attendance_marking,
     start_pending_attendance_marking,
@@ -79,6 +80,7 @@ def handle_attendance_marking_message(whatsapp_id, message_text):
 
     if text.lower() == "none":
         delete_pending_attendance_marking(whatsapp_id)
+        _record(whatsapp_id, group_label, activity_date, len(roster), 0)
         asked = _send_feedback_to_attendees(roster, activity_date)
         return f"Thanks -- noted that everyone attended.{_feedback_note(asked)}"
 
@@ -90,8 +92,11 @@ def handle_attendance_marking_message(whatsapp_id, message_text):
             + "\n".join(lines)
         )
 
-    absent_members = [roster[int(n) - 1] for n in numbers]
+    # Deduplicated ("2,2" is one absence, not two -- matters now that the
+    # absent count is recorded for reports), in the order the roster lists them.
+    absent_members = [roster[int(n) - 1] for n in sorted(set(numbers), key=int)]
     delete_pending_attendance_marking(whatsapp_id)
+    _record(whatsapp_id, group_label, activity_date, len(roster), len(absent_members))
 
     # The absence is always recorded -- attendance/membership status
     # never depends on follow-up consent. Only the "why did you miss
@@ -126,6 +131,13 @@ def handle_attendance_marking_message(whatsapp_id, message_text):
         )
     reply += _feedback_note(asked)
     return reply
+
+
+def _record(leader_whatsapp_id, group_label, activity_date, roster_size, absent_count):
+    """Every marking is recorded -- including "none" -- so reports can tell full attendance from no marking (Stage 13)."""
+    leader = get_member_by_whatsapp_id(leader_whatsapp_id)
+    record_marking(group_label, activity_date, roster_size, absent_count,
+                   leader["reg_number"] if leader else None, _now())
 
 
 def _feedback_note(asked):

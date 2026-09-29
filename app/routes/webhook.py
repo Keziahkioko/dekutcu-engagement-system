@@ -235,7 +235,11 @@ def route_incoming_message(sender_number, message_text):
         if get_pending_fellowship_checkin(sender_number) is not None:
             return fellowship_checkin.handle_checkin_message(sender_number, message_text)
         if get_pending_reason_capture(sender_number) is not None:
-            return reason_capture.handle_reason_capture_message(sender_number, message_text)
+            # Can hand the message back (expired, or not actually a reason) --
+            # then it's routed normally, like feedback.
+            reply = reason_capture.handle_reason_capture_message(sender_number, message_text)
+            if reply is not None:
+                return reply
         if get_pending_escalation_consent(sender_number) is not None:
             # A soft leader OFFER (Stage 12) returns None for anything but
             # YES/NO -- the offer is dropped and the message routed normally.

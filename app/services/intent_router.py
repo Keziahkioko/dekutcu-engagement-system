@@ -83,6 +83,7 @@ from app.services import feedback
 from app.services import rag_companion
 from app.services import org_contacts
 from app.services import exec_roles
+from app.services import reporting
 from app.services.message_generator import display_name_for
 from app.services.group_query import answer_group_question
 from app.services.llm_client import create_chat_completion
@@ -109,11 +110,11 @@ INTENT_DEFINITIONS = {
     "request_human": "Explicitly asking to speak with, be contacted by, or reach a real person, a leader, or 'someone in charge' (including a 'group admin'), or asking for a leader's phone number.",
     "contact_info": "Asking for DeKUTCU's official contact details -- how to contact the CU, its office or secretary, a phone number or email for the CU. NOT asking for a specific leader's personal number.",
     "needs_support": "Message shows real distress or a serious personal struggle, even without explicitly asking for a human.",
-    "leadership_query": "A leader asking for organizational data or a report (e.g. attendance numbers).",
+    "leadership_query": "A leader or group leader asking for a report or data about how the CU or THEIR GROUP is doing -- attendance (including 'how is my group's attendance'), who's been missing, why people miss, escalation cases, feedback, questions members asked the bot, membership numbers, event RSVPs, or evaluation numbers.",
     "send_announcement": "A leader wanting to broadcast a message to all members.",
     "allocate_groups": "A leader wanting to place new (ungrouped) members into Bible study groups.",
     "reshuffle_groups": "A leader wanting to fully regenerate every group from scratch, discarding existing placements.",
-    "group_query": "A question about Bible study groups, group leaders, group membership, or who holds an exec office -- e.g. which group someone is in, who's in a group, how many groups exist, a summary of how allocation went, who leads a group, or who the chairperson/secretary/any exec member is.",
+    "group_query": "A question about Bible study groups, group leaders, group membership, or who holds an exec office -- e.g. which group someone is in, who's in a group, how many groups exist, a summary of how allocation went, who leads a group, or who the chairperson/secretary/any exec member is. NOT attendance, who's been missing, or other report numbers -- those are leadership_query.",
     "set_exec_roles": "A leader wanting to record or update who holds the exec offices (chairperson, secretary, directors, etc.), e.g. after the AGM.",
     "nominate_group_leader": "A leader wanting to nominate or assign someone as a Bible study group leader for an area.",
     "view_group_leaders": "A leader wanting to see who the group leaders are -- confirmed, pending, or areas with no leader yet.",
@@ -838,7 +839,10 @@ def handle_message(whatsapp_id, message_text):
     member = get_member_by_whatsapp_id(whatsapp_id)
     intent = classify_intent(message_text, whatsapp_id)
 
-    if intent in LEADER_ONLY_INTENTS and not member["is_leader"]:
+    # Group leaders (not exec) may ask for reports -- about their OWN group
+    # only; reporting.py scopes what each role can see.
+    group_leader_report = intent == "leadership_query" and member["leads_group_label"]
+    if intent in LEADER_ONLY_INTENTS and not member["is_leader"] and not group_leader_report:
         # Don't confirm the feature exists to a non-leader -- just
         # fall back to the generic "can't help with that" response.
         intent = "unclear"
@@ -911,7 +915,7 @@ _STUB_HANDLERS = {
     "request_human": _handle_request_human,
     "contact_info": lambda member, text: org_contacts.contact_reply(),
     "needs_support": _handle_needs_support,
-    "leadership_query": _handle_stub("Leadership reports"),
+    "leadership_query": lambda member, text: reporting.answer_leadership_question(member, text),
     "send_announcement": _handle_stub("Sending announcements"),
     "allocate_groups": _handle_allocate_groups,
     "reshuffle_groups": _handle_reshuffle_groups,
