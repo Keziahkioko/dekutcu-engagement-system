@@ -1,0 +1,45 @@
+{% extends "dashboard/base.html" %}
+{% block title %}My group · DeKUTCU Reports{% endblock %}
+{% block content %}
+{% set mine = attendance.bible_study[0] if attendance.bible_study else none %}
+<div class="cards">
+  <div class="card"><div class="label">Group</div><div class="value" style="font-size:20px">{{ group }}</div></div>
+  <div class="card"><div class="label">Attendance</div>
+    <div class="value">{{ mine.attendance_rate_percent ~ '%' if mine and mine.attendance_rate_percent is not none else '—' }}</div>
+    <div class="note">{{ mine.sessions_marked if mine else 0 }} session(s) marked</div></div>
+  <div class="card"><div class="label">Missing repeatedly</div>
+    <div class="value {{ 'warn' if lapsing }}">{{ lapsing | length }}</div></div>
+</div>
+
+<div class="panel">
+  <h2>Attendance rate, week by week</h2>
+  {% if bible_study_weekly %}<canvas id="bsChart"></canvas>
+  {% else %}<div class="empty">No attendance marked for your group in this period yet.</div>{% endif %}
+</div>
+
+<div class="panel">
+  <h2>Members missing repeatedly</h2>
+  <p class="note">Reasons are shown as categories only -- never members' own words.</p>
+  {% if lapsing %}
+  <div class="table-wrap"><table>
+    <tr><th>Name</th><th>Activity</th><th>Missed in a row</th><th>Latest reason</th></tr>
+    {% for m in lapsing %}
+    <tr><td>{{ m.name }}</td><td>{{ m.activity }}</td><td>{{ m.missed_in_a_row }}</td><td>{{ m.latest_reason_category }}</td></tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<div class="empty">Nobody in your group is on a missed-session streak right now.</div>{% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const bs = {{ bible_study_weekly | tojson }};
+  if (bs.length) {
+    new Chart(document.getElementById('bsChart'), {
+      type: 'line',
+      data: { labels: bs.map(w => 'Week of ' + w.week), datasets: [{ label: 'Attendance %', data: bs.map(w => w.rate), borderColor: '#2f5aa8', tension: 0.2 }] },
+      options: { scales: { y: { min: 0, max: 100 } }, plugins: { legend: { display: false } } }
+    });
+  }
+</script>
+{% endblock %}

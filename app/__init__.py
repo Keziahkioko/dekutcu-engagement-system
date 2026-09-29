@@ -16,6 +16,9 @@ from flask import Flask
 from dotenv import load_dotenv
 
 from app.routes.webhook import webhook_bp, start_message_worker
+from app.routes.dashboard import dashboard_bp
+from app.services.dashboard import SESSION_LIFETIME
+from app.models.dashboard_login import init_dashboard_login_table
 from app.models.member import init_members_table
 from app.models.pending_registration import init_pending_registrations_table
 from app.models.pending_action import init_pending_actions_table
@@ -60,6 +63,19 @@ def create_app():
 
     # Register route blueprints
     app.register_blueprint(webhook_bp)
+    app.register_blueprint(dashboard_bp)
+
+    # The reports website's login session (Stage 13 -- see
+    # app/routes/dashboard.py). Signed with DASHBOARD_SECRET_KEY; with no
+    # key the website stays switched off rather than using a weak default.
+    # HTTP-only (page scripts can't read it), HTTPS-only on Render, 12 hours.
+    app.secret_key = os.getenv("DASHBOARD_SECRET_KEY") or None
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SECURE=os.getenv("RENDER") == "true",
+        SESSION_COOKIE_SAMESITE="Lax",
+        PERMANENT_SESSION_LIFETIME=SESSION_LIFETIME,
+    )
 
     # Make sure all tables exist before the app starts serving requests
     init_members_table()
@@ -90,6 +106,7 @@ def create_app():
     init_pending_exec_role_table()
     init_attendance_markings_table()
     init_member_question_tables()
+    init_dashboard_login_table()
 
     run_workers = _should_run_background_workers()
     if run_workers:

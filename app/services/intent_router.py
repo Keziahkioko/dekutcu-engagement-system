@@ -84,6 +84,7 @@ from app.services import rag_companion
 from app.services import org_contacts
 from app.services import exec_roles
 from app.services import reporting
+from app.services import dashboard
 from app.services.message_generator import display_name_for
 from app.services.group_query import answer_group_question
 from app.services.llm_client import create_chat_completion
@@ -111,6 +112,7 @@ INTENT_DEFINITIONS = {
     "contact_info": "Asking for DeKUTCU's official contact details -- how to contact the CU, its office or secretary, a phone number or email for the CU. NOT asking for a specific leader's personal number.",
     "needs_support": "Message shows real distress or a serious personal struggle, even without explicitly asking for a human.",
     "leadership_query": "A leader or group leader asking for a report or data about how the CU or THEIR GROUP is doing -- attendance (including 'how is my group's attendance'), who's been missing, why people miss, escalation cases, what members have said in feedback (comments, questions, recommendations/suggestions, challenges they face), questions members asked the bot, membership numbers, event RSVPs, or evaluation numbers. A question about what MEMBERS have said, suggested or reported is this -- not a question about the constitution.",
+    "reports_website": "A leader or group leader asking for the reports website / online reports / a login link to see reports or charts online (e.g. 'send me the reports link', 'can I see the reports online?', 'log me in').",
     "send_announcement": "A leader wanting to broadcast a message to all members.",
     "allocate_groups": "A leader wanting to place new (ungrouped) members into Bible study groups.",
     "reshuffle_groups": "A leader wanting to fully regenerate every group from scratch, discarding existing placements.",
@@ -130,7 +132,7 @@ VALID_INTENTS = set(INTENT_DEFINITIONS.keys())
 LEADER_ONLY_INTENTS = {
     "leadership_query", "send_announcement", "allocate_groups", "reshuffle_groups",
     "nominate_group_leader", "view_group_leaders", "resolve_pending_leader", "remove_group_leader",
-    "resolve_reassignments", "create_event", "send_checkin", "set_exec_roles",
+    "resolve_reassignments", "create_event", "send_checkin", "set_exec_roles", "reports_website",
 }
 
 # Guards against two allocation runs (each ~10-15 seconds) overlapping
@@ -841,7 +843,7 @@ def handle_message(whatsapp_id, message_text):
 
     # Group leaders (not exec) may ask for reports -- about their OWN group
     # only; reporting.py scopes what each role can see.
-    group_leader_report = intent == "leadership_query" and member["leads_group_label"]
+    group_leader_report = intent in ("leadership_query", "reports_website") and member["leads_group_label"]
     if intent in LEADER_ONLY_INTENTS and not member["is_leader"] and not group_leader_report:
         # Don't confirm the feature exists to a non-leader -- just
         # fall back to the generic "can't help with that" response.
@@ -916,6 +918,7 @@ _STUB_HANDLERS = {
     "contact_info": lambda member, text: org_contacts.contact_reply(),
     "needs_support": _handle_needs_support,
     "leadership_query": lambda member, text: reporting.answer_leadership_question(member, text),
+    "reports_website": lambda member, text: dashboard.link_reply(member),
     "send_announcement": _handle_stub("Sending announcements"),
     "allocate_groups": _handle_allocate_groups,
     "reshuffle_groups": _handle_reshuffle_groups,

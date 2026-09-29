@@ -454,7 +454,8 @@ def build_weekly_digest():
     uncovered = cq["not_covered_general_questions_anonymous"]
     if uncovered:
         lines.append(f"Questions the materials didn't cover: {len(uncovered)} -- worth adding material on.")
-    lines += ["", "Ask me for details, e.g. \"who's been missing?\" or \"show this week's feedback\"."]
+    lines += ["", "Ask me for details, e.g. \"who's been missing?\" or \"show this week's feedback\" -- "
+              "or ask for the reports website to see the charts."]
     return "\n".join(lines)
 
 
