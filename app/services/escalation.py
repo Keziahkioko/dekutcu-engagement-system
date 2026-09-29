@@ -42,8 +42,9 @@ from app.models.member import (
 )
 from app.models.escalation import (
     create_escalation, create_case, claim_case, get_case, get_recent_case,
-    notified_leaders, open_cases_for_leader,
+    notified_leaders, open_cases_for_leader, get_unclaimed_cases, mark_case,
 )
+from app.models.member import get_exec_office_holders
 from app.models.pending_escalation_consent import (
     get_pending_escalation_consent,
     start_pending_escalation_consent,
@@ -137,6 +138,11 @@ def _already_in_hand(case):
         leader = get_member_by_reg_number(case["claimed_by_reg_number"])
         who = leader["name"] if leader else "A leader"
         return f"{who} already knows and will be reaching out to you soon."
+    notified = notified_leaders(case["id"])
+    if len(notified) == 1:
+        leader = get_member_by_reg_number(notified[0])
+        if leader:
+            return f"I've already let {leader['name']} know -- they'll be in touch soon."
     return "I've already let your leaders know -- one of them will be in touch soon."
 
 
@@ -144,22 +150,24 @@ def _whatsapp_number(whatsapp_id):
     return f"+{whatsapp_id}" if whatsapp_id and not whatsapp_id.startswith("+") else whatsapp_id
 
 
-def _notify_leaders(member, trigger_type, context_text, urgency_label):
+def _notify_leaders(member, trigger_type, context_text, urgency_label, acute=False):
     """
     Opens a case and notifies every target leader. Every notification
     includes the member's WhatsApp number (Keziah's decision: they agreed
     to be contacted, or it's acute risk where speed matters) so the
-    leader can actually reach them. With ONE target the case is theirs
-    automatically; with several, each is asked to reply CLAIM <case> and
-    the first to do so takes it (see handle_claim).
+    leader can actually reach them. EVERY case needs an explicit CLAIM,
+    even with a single leader (usually the member's own group leader) --
+    it used to be owned automatically, which meant nothing ever checked
+    that leader responded (fixed 2026-09-29). Unclaimed cases are
+    reminded and then escalated by follow_up_unclaimed_cases. With
+    several leaders the first to claim takes it (see handle_claim).
     """
     targets = find_target_leaders(member)
     if not targets:
         return None, targets
 
-    case_id = create_case(member["reg_number"], trigger_type, context_text, _now())
-    if len(targets) == 1:
-        claim_case(case_id, targets[0][2], _now())
+    case_id = create_case(member["reg_number"], trigger_type, context_text, _now(),
+                          urgency="acute" if acute else "normal")
 
     for whatsapp_id, name, leader_reg_number in targets:
         notification = f"{member['name']} {urgency_label}"
@@ -167,7 +175,7 @@ def _notify_leaders(member, trigger_type, context_text, urgency_label):
             notification += f" -- they said: \"{context_text}\""
         notification += f"\n\nTheir WhatsApp: {_whatsapp_number(member['whatsapp_id'])}"
         if len(targets) == 1:
-            notification += "\n\nPlease reach out to them."
+            notification += f"\n\nPlease reach out to them, and reply CLAIM {case_id} to confirm you're taking it."
         else:
             notification += (
                 f"\n\n{len(targets)} leaders were told about this. If you'll reach out, "
@@ -198,7 +206,7 @@ def escalate_now(member, trigger_type, context_text, urgency_label="may need som
 
 def escalate_acute(member, trigger_type, context_text):
     """For acute_risk -- escalates regardless of consent, always transparently, and ALWAYS again even if recent."""
-    _case_id, targets = _notify_leaders(member, trigger_type, context_text, "may need urgent support")
+    _case_id, targets = _notify_leaders(member, trigger_type, context_text, "may need urgent support", acute=True)
     if targets:
         who = targets[0][1] if len(targets) == 1 else "your leaders"
         return (
@@ -371,4 +379,113 @@ def handle_claim(leader_whatsapp_id, message_text):
     if member and member["whatsapp_id"]:
         send_whatsapp_message(member["whatsapp_id"], f"{leader['name']} will be reaching out to you soon.")
 
-    return f"Thanks -- it's yours. {member_name}: {number_text}. The other leaders and {member_name} have been told."
+    told = f"The other leaders and {member_name} have been told." if len(notified_leaders(case_id)) > 1 else f"{member_name} has been told you'll be in touch."
+    return f"Thanks -- it's yours. {member_name}: {number_text}. {told}"
+
+
+# ---------------------------------------------------------------------
+# Stage 13: follow-up of UNCLAIMED cases (settled with Keziah). Before
+# this, a case several leaders were told about but nobody claimed just
+# sat there -- a member who asked for help, or was at risk, could hear
+# from no one. Runs every few minutes from the scheduler:
+#   1. reminder to every notified leader -- after 2h (acute: 30 min);
+#   2. backstop -- after 6h (acute: 2h) the Chairperson and both Vice
+#      Chairpersons (whichever are recorded; Keziah's choice) are told and
+#      can CLAIM it too; if none is recorded, the notified leaders are
+#      reminded again.
+# Quiet hours (10pm-7am Nairobi) delay only NON-acute steps; acute risk
+# goes out at any hour. reminded_at/backstop_at make each step happen
+# exactly once. Every case needs an explicit claim -- including one sent
+# only to the member's own group leader -- so every case is followed up.
+# ---------------------------------------------------------------------
+
+_FOLLOW_UP = {
+    "normal": {"reminder": timedelta(hours=2), "backstop": timedelta(hours=6)},
+    "acute": {"reminder": timedelta(minutes=30), "backstop": timedelta(hours=2)},
+}
+BACKSTOP_OFFICES = ["Chairperson", "First Vice Chairperson", "Second Vice Chairperson"]
+_QUIET_START_HOUR, _QUIET_END_HOUR = 22, 7
+
+
+def _in_quiet_hours(now_utc):
+    from app.services.scheduler import NAIROBI  # local import: scheduler has no reason to import escalation
+    hour = now_utc.astimezone(NAIROBI).hour
+    return hour >= _QUIET_START_HOUR or hour < _QUIET_END_HOUR
+
+
+def _age(case, now_utc):
+    created = case["created_at"]
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return now_utc - created
+
+
+def _ago(delta):
+    minutes = int(delta.total_seconds() // 60)
+    if minutes < 90:
+        return f"{minutes} minutes"
+    return f"{round(minutes / 60)} hours"
+
+
+def _backstop_people(member):
+    """(office, member row) for the recorded Chair/Vice-Chairs -- never the member themselves."""
+    holders = get_exec_office_holders()
+    return [(office, holders[office]) for office in BACKSTOP_OFFICES
+            if office in holders and holders[office]["whatsapp_id"]
+            and holders[office]["reg_number"] != member["reg_number"]]
+
+
+def _remind_notified(case, member, age):
+    what = "was flagged as possibly needing urgent support" if case["urgency"] == "acute" else "asked for support"
+    for reg in notified_leaders(case["id"]):
+        leader = get_member_by_reg_number(reg)
+        if leader and leader["whatsapp_id"]:
+            send_whatsapp_message(
+                leader["whatsapp_id"],
+                f"Still unclaimed: {member['name']} {what} {_ago(age)} ago and no leader has taken it yet.\n\n"
+                f"Their WhatsApp: {_whatsapp_number(member['whatsapp_id'])}\n\n"
+                f"If you can reach out, reply CLAIM {case['id']}.",
+            )
+
+
+def _backstop(case, member, age):
+    people = _backstop_people(member)
+    if not people:
+        _remind_notified(case, member, age)
+        return
+    what = "was flagged as possibly needing urgent support" if case["urgency"] == "acute" else "asked for support"
+    for office, person in people:
+        text = f"{member['name']} {what} {_ago(age)} ago and no leader has claimed it yet."
+        if case["context_text"]:
+            text += f" They said: \"{case['context_text']}\""
+        text += (
+            f"\n\nTheir WhatsApp: {_whatsapp_number(member['whatsapp_id'])}\n\n"
+            f"As {office}, please make sure someone reaches out -- reply CLAIM {case['id']} to take it yourself."
+        )
+        send_whatsapp_message(person["whatsapp_id"], text)
+        # Recorded as notified on this case, so their CLAIM is accepted.
+        create_escalation(member["reg_number"], f"{case['trigger_type']}_backstop", case["context_text"],
+                          person["reg_number"], _now(), case["id"])
+
+
+def follow_up_unclaimed_cases():
+    """The every-few-minutes scheduled task -- see the section comment above."""
+    now = datetime.now(timezone.utc)
+    quiet = _in_quiet_hours(now)
+    for case in get_unclaimed_cases():
+        acute = case["urgency"] == "acute"
+        if quiet and not acute:
+            continue
+        member = get_member_by_reg_number(case["reg_number"])
+        if not member:
+            continue
+        timings = _FOLLOW_UP["acute" if acute else "normal"]
+        age = _age(case, now)
+        if case["backstop_at"] is None and age >= timings["backstop"]:
+            _backstop(case, member, age)
+            mark_case(case["id"], "backstop_at", _now())
+            if case["reminded_at"] is None:
+                mark_case(case["id"], "reminded_at", _now())  # the backstop supersedes a missed reminder
+        elif case["reminded_at"] is None and age >= timings["reminder"]:
+            _remind_notified(case, member, age)
+            mark_case(case["id"], "reminded_at", _now())

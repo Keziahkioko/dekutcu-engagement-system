@@ -45,6 +45,13 @@ def init_escalations_table():
         )
     """)
     cursor.execute("ALTER TABLE escalations ADD COLUMN IF NOT EXISTS case_id INTEGER REFERENCES escalation_cases(id)")
+    # Stage 13 -- follow-up of UNCLAIMED cases (see
+    # escalation.follow_up_unclaimed_cases): urgency sets the timings
+    # (acute is followed up faster and ignores quiet hours); reminded_at
+    # and backstop_at make sure each step happens exactly once.
+    cursor.execute("ALTER TABLE escalation_cases ADD COLUMN IF NOT EXISTS urgency TEXT DEFAULT 'normal' NOT NULL")
+    cursor.execute("ALTER TABLE escalation_cases ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMP")
+    cursor.execute("ALTER TABLE escalation_cases ADD COLUMN IF NOT EXISTS backstop_at TIMESTAMP")
     conn.commit()
     cursor.close()
     conn.close()
@@ -62,13 +69,13 @@ def create_escalation(reg_number, trigger_type, context_text, notified_leader_re
     conn.close()
 
 
-def create_case(reg_number, trigger_type, context_text, created_at):
+def create_case(reg_number, trigger_type, context_text, created_at, urgency="normal"):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO escalation_cases (reg_number, trigger_type, context_text, created_at)
-        VALUES (%s, %s, %s, %s) RETURNING id
-    """, (reg_number, trigger_type, context_text, created_at))
+        INSERT INTO escalation_cases (reg_number, trigger_type, context_text, created_at, urgency)
+        VALUES (%s, %s, %s, %s, %s) RETURNING id
+    """, (reg_number, trigger_type, context_text, created_at, urgency))
     case_id = cursor.fetchone()["id"]
     conn.commit()
     cursor.close()
@@ -145,3 +152,25 @@ def open_cases_for_leader(leader_reg_number):
     cursor.close()
     conn.close()
     return rows
+
+
+def get_unclaimed_cases():
+    """Every case nobody has claimed yet, oldest first."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM escalation_cases WHERE claimed_by_reg_number IS NULL ORDER BY created_at")
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
+
+
+def mark_case(case_id, column, at):
+    """Records that a follow-up step happened -- column is 'reminded_at' or 'backstop_at'."""
+    assert column in ("reminded_at", "backstop_at")
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"UPDATE escalation_cases SET {column} = %s WHERE id = %s", (at, case_id))
+    conn.commit()
+    cursor.close()
+    conn.close()

@@ -29,13 +29,31 @@ _CHECK_INTERVAL_SECONDS = 300  # 5 minutes -- hour-level precision is enough, no
 
 _tasks = []  # (name, weekday, hour, func) -- weekday: Monday=0 ... Sunday=6 (matching date.weekday()), or None for "every day"
 
+# Stage 13: tasks that run on EVERY check (every _CHECK_INTERVAL_SECONDS),
+# not at a fixed hour -- first needed for following up unclaimed
+# escalations, where acute risk can't wait for the next hour's slot. They
+# must be safe to run repeatedly: they track their own progress (e.g.
+# escalation_cases.reminded_at) rather than relying on run-once dedup.
+_every_check_tasks = []  # (name, func)
+
 
 def register_task(name, weekday, hour, func):
     """weekday=None means the task runs every day at this hour."""
     _tasks.append((name, weekday, hour, func))
 
 
+def register_every_check_task(name, func):
+    """Runs on every scheduler check (every few minutes). func must be safe to repeat."""
+    _every_check_tasks.append((name, func))
+
+
 def _run_due_tasks():
+    for name, func in _every_check_tasks:
+        try:
+            func()
+        except Exception as e:
+            print(f"Every-check task '{name}' failed: {e}")
+
     now = datetime.now(NAIROBI)
     today = now.date()
 

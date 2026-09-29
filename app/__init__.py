@@ -9,6 +9,7 @@ Every other file (run.py, tests) should go through create_app()
 instead of building a Flask app on its own.
 """
 
+import os
 import functools
 
 from flask import Flask
@@ -41,7 +42,8 @@ from app.models.feedback_request import init_feedback_requests_table
 from app.models.pending_feedback import init_pending_feedback_table
 from app.models.rag import init_rag_tables
 from app.models.pending_exec_role import init_pending_exec_role_table
-from app.services.scheduler import start_scheduler, register_task
+from app.services.scheduler import start_scheduler, register_task, register_every_check_task
+from app.services.escalation import follow_up_unclaimed_cases
 from app.services.attendance import send_bible_study_nudges
 from app.services.fellowship_checkin import send_fellowship_checkin, process_stale_checkins, TRACKED_WEEKDAYS
 from app.services.bandit import compute_pending_rewards
@@ -83,7 +85,11 @@ def create_app():
     init_rag_tables()
     init_pending_exec_role_table()
 
-    start_message_worker()
+    run_workers = _should_run_background_workers()
+    if run_workers:
+        start_message_worker()
+    else:
+        print("Background workers NOT started (not on Render) -- set RUN_BACKGROUND_WORKERS=true to override.")
 
     # Tuesday, 21:00 Nairobi time -- weekday 1 = Tuesday (Monday=0 ... Sunday=6)
     register_task("bible_study_nudge", weekday=1, hour=21, func=send_bible_study_nudges)
@@ -109,6 +115,29 @@ def create_app():
     # this looks for absences whose reward window has passed.
     register_task("bandit_reward_computation", weekday=None, hour=13, func=compute_pending_rewards)
 
-    start_scheduler()
+    # Every scheduler check (~5 minutes) -- reminds and then escalates any
+    # escalation case nobody has claimed; acute risk can't wait for an
+    # hourly slot. See escalation.follow_up_unclaimed_cases.
+    register_every_check_task("follow_up_unclaimed_escalations", follow_up_unclaimed_cases)
+
+    if run_workers:
+        start_scheduler()
 
     return app
+
+
+def _should_run_background_workers():
+    """
+    The message workers (which answer queued WhatsApp messages) and the
+    scheduler (check-ins, sweeps, escalation follow-ups) run ONLY on
+    Render by default. The laptop and Render share one database, so any
+    other copy of the app running them would compete with production for
+    real members' incoming messages and scheduled jobs -- answering with
+    whatever untested code is on the laptop. Found while fixing the
+    duplicate escalation follow-up concern (2026-09-29).
+
+    Render sets RENDER="true" on every service (documented by Render for
+    exactly this purpose), so production needs no configuration.
+    RUN_BACKGROUND_WORKERS=true switches them on elsewhere, deliberately.
+    """
+    return os.getenv("RENDER") == "true" or os.getenv("RUN_BACKGROUND_WORKERS", "").strip().lower() == "true"
