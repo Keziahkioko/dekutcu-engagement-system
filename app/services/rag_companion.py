@@ -96,6 +96,36 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
+# Everyday word -> the constitution's own term, applied ONLY to the text that
+# is searched (the answering model still sees the member's original words).
+# Found in the first live test: the constitution never says "election" -- it
+# says "nomination" -- so "How do elections of the exec happen?" retrieved
+# termination and by-nomination articles and the answer came out wrong. Unlike
+# free query-rewriting by a model (tested earlier, no better), this is a short,
+# fixed, hand-written list from reading THIS constitution: predictable and
+# easy to extend when real members' questions reveal new gaps.
+_GLOSSARY = [
+    (re.compile(r"\belect(?:ion|ions|ed|ing)?\b", re.IGNORECASE), "nomination, Nomination College"),
+    (re.compile(r"\bAGMs?\b", re.IGNORECASE), "Annual General Meeting, general meetings"),
+    # The constitution frames voting as a RIGHT of members (Art. 14/16), not an
+    # AGM procedure -- without this, "Can I vote at the AGM?" found only the AGM
+    # procedure articles (tested: MISS -> #2).
+    (re.compile(r"\bvot(?:e|es|ing)\b", re.IGNORECASE), "entitled to vote, members' rights"),
+    (re.compile(r"\bexecs?\b", re.IGNORECASE), "Executive Committee"),
+    (re.compile(r"\bchair\b", re.IGNORECASE), "chairperson"),
+    (re.compile(r"\b(?:money|contributions?)\b", re.IGNORECASE), "funds, finance"),
+    (re.compile(r"\b(?:heaven|saved)\b", re.IGNORECASE), "salvation, redemption, justification"),
+]
+
+
+def _search_text(question):
+    """The question with each glossary term's constitution wording added after it in brackets."""
+    text = question
+    for pattern, constitution_terms in _GLOSSARY:
+        text = pattern.sub(lambda m: f"{m.group(0)} ({constitution_terms})", text)
+    return text
+
+
 # "(Art 42)", "(Art. 11(G) and (H))", "(Article 19)" -- one level of nested
 # brackets allowed, since clause letters are themselves bracketed.
 _INLINE_ARTICLE_REF = re.compile(r"\s*\((?:Art\.?|Articles?)\s[^()]*(?:\([^()]*\)[^()]*)*\)")
@@ -109,7 +139,20 @@ def _strip_inline_citations(answer):
     must come from that checked list, so inline ones are removed here
     (the prompt also forbids them; this is the guarantee).
     """
-    return re.sub(r"\s+([.,;:])", r"\1", _INLINE_ARTICLE_REF.sub("", answer)).strip()
+    answer = _INLINE_ARTICLE_REF.sub("", answer)
+    # Article numbers written INTO a sentence ("...as set out in Art 53, with...")
+    # can't simply be deleted without breaking the grammar -- found in the first
+    # live test. They're replaced with "the constitution" instead; the exact,
+    # checked citation stays on the Source line.
+    answer = _IN_SENTENCE_ARTICLE_REF.sub("the constitution", answer)
+    return re.sub(r"\s+([.,;:])", r"\1", answer).strip()
+
+
+_IN_SENTENCE_ARTICLE_REF = re.compile(
+    r"\b(?:Art\.?|Articles?)\s*\d+(?:\s*\([A-Z](?:\s*-\s*[A-Z])?\))*"
+    r"(?:\s*(?:,|and|&)\s*\d+(?:\s*\([A-Z](?:\s*-\s*[A-Z])?\))*)*",
+    re.IGNORECASE,
+)
 
 
 def _format_passages(chunks):
@@ -199,7 +242,7 @@ def answer_question(member, question, pastoral=False):
         return escalation.start_leader_offer(whatsapp_id, offer_trigger, question)
 
     try:
-        chunks = _expand_doctrinal_basis(nearest_chunks(embed_query(question), TOP_K))
+        chunks = _expand_doctrinal_basis(nearest_chunks(embed_query(_search_text(question)), TOP_K))
         retrieved = [{"citation": c["citation"],
                       "similarity": None if c["similarity"] is None else round(float(c["similarity"]), 4)}
                      for c in chunks]
