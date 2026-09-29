@@ -207,6 +207,13 @@ def route_incoming_message(sender_number, message_text):
         return _handle_global_resume(sender_number)
 
     if is_registered(sender_number):
+        # A leader claiming an escalation case ("CLAIM 12") -- checked before
+        # any pending flow, since they may be mid-way through something else.
+        # Falls through if they have nothing to claim.
+        if escalation.is_claim_message(message_text):
+            reply = escalation.handle_claim(sender_number, message_text)
+            if reply is not None:
+                return reply
         if get_pending_action(sender_number) is not None:
             return handle_pending_action_response(sender_number, message_text)
         if get_pending_leader_nomination(sender_number) is not None:

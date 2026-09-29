@@ -47,6 +47,7 @@ pattern used throughout Stage 6.
 """
 
 import os
+import re
 import json
 import threading
 from datetime import date
@@ -80,6 +81,7 @@ from app.services import escalation
 from app.services import fellowship_checkin
 from app.services import feedback
 from app.services import rag_companion
+from app.services import org_contacts
 from app.services.message_generator import display_name_for
 from app.services.group_query import answer_group_question
 from app.services.llm_client import create_chat_completion
@@ -103,7 +105,8 @@ INTENT_DEFINITIONS = {
     "unsubscribe_followup": "Wanting to stop receiving follow-up/accountability check-ins specifically.",
     "resume_followup": "Wanting to start receiving follow-up/accountability check-ins again, having previously stopped them.",
     "withdraw_data_consent": "Wanting to withdraw consent entirely and stop being tracked/registered.",
-    "request_human": "Explicitly asking to speak with a real person or a leader.",
+    "request_human": "Explicitly asking to speak with, be contacted by, or reach a real person, a leader, or 'someone in charge' (including a 'group admin'), or asking for a leader's phone number.",
+    "contact_info": "Asking for DeKUTCU's official contact details -- how to contact the CU, its office or secretary, a phone number or email for the CU. NOT asking for a specific leader's personal number.",
     "needs_support": "Message shows real distress or a serious personal struggle, even without explicitly asking for a human.",
     "leadership_query": "A leader asking for organizational data or a report (e.g. attendance numbers).",
     "send_announcement": "A leader wanting to broadcast a message to all members.",
@@ -604,7 +607,17 @@ def _handle_request_human(member, text):
     escalation.py's module docstring for why this differs from
     needs_support).
     """
-    return escalation.escalate_now(member, "request_human", text)
+    reply = escalation.escalate_now(member, "request_human", text)
+    if _ASKS_FOR_NUMBER.search(text):
+        # Leaders' personal numbers are never shared with members (Keziah's
+        # decision) -- the notified leader already has the member's number
+        # and reaches out instead. DeKUTCU's official contacts are a
+        # separate case: see org_contacts.py / the contact_info intent.
+        reply += "\n\nFor privacy I don't share leaders' personal numbers -- they'll contact you directly."
+    return reply
+
+
+_ASKS_FOR_NUMBER = re.compile(r"\b(number|phone|contact)\b", re.IGNORECASE)
 
 
 def _handle_needs_support(member, text):
@@ -869,6 +882,7 @@ _STUB_HANDLERS = {
     "resume_followup": _handle_resume_followup,
     "withdraw_data_consent": _handle_withdraw_data_consent,
     "request_human": _handle_request_human,
+    "contact_info": lambda member, text: org_contacts.contact_reply(),
     "needs_support": _handle_needs_support,
     "leadership_query": _handle_stub("Leadership reports"),
     "send_announcement": _handle_stub("Sending announcements"),

@@ -11,7 +11,8 @@ The path a question takes:
      (Stage 11). Acute risk -> leader notified regardless of consent,
      always transparently, and nothing is retrieved or generated.
      Distress -> the question IS still answered, but followed by the
-     strict Stage 11 consent question rather than the soft offer.
+     Stage 11 consent question ("Would it be okay if I let a leader
+     know?") rather than the casual offer.
   2. Retrieval: the 8 chunks nearest in meaning (Cloudflare
      bge-large-en-v1.5 + pgvector). 8, not 3: measured on the real
      constitution, the right passage was present for 11/12 test
@@ -188,7 +189,7 @@ def answer_question(member, question, pastoral=False):
     def leader_question(offer_trigger):
         """
         Distress (not acute): the member still gets an answer, but it's
-        followed by Stage 11's STRICT consent question instead of the soft
+        followed by Stage 11's consent question instead of the casual
         offer -- settled with Keziah after testing showed honest pastoral
         questions ("I keep falling into the same sin...") are often rated
         distress, which would otherwise mean they never get an answer.

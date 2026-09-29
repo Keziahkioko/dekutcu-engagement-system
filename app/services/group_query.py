@@ -30,8 +30,10 @@ OpenAI-style tool calling -- verified directly before building this.
 """
 
 import os
+import re
 import json
 
+from app.services import org_contacts
 from app.models.member import (
     get_group_members,
     get_leader_of_group,
@@ -79,8 +81,51 @@ _SYSTEM_PROMPT = (
     "asked for -- summary vs. names) for the area you were just discussing.\n\n"
     "Never just say you couldn't find an answer without first trying a "
     "different tool, or asking one direct clarifying question -- only give up "
-    "if the area or group genuinely doesn't exist at all."
+    "if the area or group genuinely doesn't exist at all.\n\n"
+    "YOU ONLY ANSWER QUESTIONS -- you cannot do anything else. Never offer or "
+    "promise to contact anyone, pass on a message, reach an admin, draft a "
+    "message, or take any other action. Never state any contact detail (email "
+    "address, phone number, website, office, group chat): your tools don't "
+    "provide any, so any you wrote would be invented. There is no 'group "
+    "admin'. If the member wants to reach a leader or someone in charge, tell "
+    "them to say \"I'd like to talk to a leader\" and the bot will let one know; "
+    "if they want DeKUTCU's official contacts, tell them to ask \"How do I "
+    "contact the CU?\"."
 )
+
+# Found in the first live test: asked to help reach a "group admin", the model
+# invented an office, an email address and a +1-800 phone number. The tools
+# never return contact details, so ANY email, phone number or link in a reply
+# was made up -- except DeKUTCU's configured official contacts. This is the
+# guarantee; the prompt rule above is the first line of defence.
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+_PHONE = re.compile(r"\+\s?\d[\d\s\-‐-―()]*|\d[\d\s\-‐-―()]{6,}\d")
+_LINK = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
+
+_INVENTED_CONTACT_REPLY = (
+    "I can only answer questions about groups and leaders -- I don't have anyone's "
+    "contact details here. To reach a leader, just say \"I'd like to talk to a "
+    "leader\" and I'll let one know, or ask \"How do I contact the CU?\" for "
+    "DeKUTCU's official contacts."
+)
+
+
+def _has_invented_contact(reply):
+    candidates = _EMAIL.findall(reply) + _PHONE.findall(reply) + _LINK.findall(reply)
+    # rstrip: a sentence-ending "." or "," gets captured with an email or
+    # number -- found in testing, it made the official email itself fail.
+    return any(not org_contacts.is_official(c.strip().rstrip(".,;:!?)")) for c in candidates)
+
+
+def _whatsapp_format(reply):
+    """WhatsApp bolds *single* asterisks; Markdown's **double** ones show up literally."""
+    return re.sub(r"\*\*(.+?)\*\*", r"*\1*", reply)
+
+
+def _finalise(reply):
+    if _has_invented_contact(reply):
+        return _INVENTED_CONTACT_REPLY
+    return _whatsapp_format(reply)
 
 _FALLBACK_MESSAGE = (
     "I'm not sure how to answer that -- could you rephrase, or ask about one "
@@ -310,7 +355,7 @@ def answer_group_question(member, message_text):
             reply_message = response.choices[0].message
 
             if not reply_message.tool_calls:
-                return reply_message.content or _FALLBACK_MESSAGE
+                return _finalise(reply_message.content or _FALLBACK_MESSAGE)
 
             # Stored as a minimal plain dict, not the SDK's own message
             # object and NOT a full model_dump() -- if a later round in
