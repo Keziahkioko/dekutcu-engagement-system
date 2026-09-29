@@ -43,6 +43,10 @@ def init_feedback_requests_table():
             severity TEXT
         )
     """)
+    # Stage 13: feedback / question / recommendation / challenge -- set by
+    # the daily batch in feedback_themes.py, NULL until then (and forever
+    # for skips and distress-flagged replies, which are never sorted).
+    cursor.execute("ALTER TABLE feedback_requests ADD COLUMN IF NOT EXISTS theme TEXT")
     conn.commit()
     cursor.close()
     conn.close()
@@ -81,6 +85,30 @@ def record_feedback_response(request_id, response_text, severity, responded_at):
         SET response_text = %s, severity = %s, responded_at = %s
         WHERE id = %s
     """, (response_text, severity, responded_at, request_id))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def get_unthemed_feedback(limit):
+    """Replies with text still waiting to be sorted -- never distress-flagged ones (they're never sorted or shown)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, response_text FROM feedback_requests
+        WHERE response_text IS NOT NULL AND theme IS NULL AND COALESCE(severity, 'none') = 'none'
+        ORDER BY responded_at LIMIT %s
+    """, (limit,))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
+
+
+def set_theme(request_id, theme):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE feedback_requests SET theme = %s WHERE id = %s", (theme, request_id))
     conn.commit()
     cursor.close()
     conn.close()

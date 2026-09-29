@@ -281,3 +281,48 @@ def answer_question(member, question, pastoral=False):
     if pastoral or severity == "distress":
         reply += "\n\n" + leader_question("pastoral_question")
     return reply
+
+
+def answer_from_materials(member, question):
+    """
+    Stage 13: for a QUESTION a member asked inside their feedback. Returns
+    the answer with its checked Source line, or None if DeKUTCU's materials
+    don't cover it (then member_questions relays it to the leaders). No
+    severity check here -- feedback.py has already run one on the reply --
+    and no leader offers: the feedback flow adds its own ASK option. Same
+    retrieval, generation, citation checking and logging as answer_question
+    (logged with kind 'feedback_question').
+    """
+    def log(outcome, retrieved=None, answer=None, cited=None, invalid=0, tokens=None):
+        log_query(member["reg_number"], question, "feedback_question", "none", retrieved or [], outcome,
+                  answer, cited or [], invalid, tokens, _now())
+
+    try:
+        chunks = _expand_doctrinal_basis(nearest_chunks(embed_query(_search_text(question)), TOP_K))
+        retrieved = [{"citation": c["citation"],
+                      "similarity": None if c["similarity"] is None else round(float(c["similarity"]), 4)}
+                     for c in chunks]
+        verdict, tokens = _generate(question, chunks, pastoral=False)
+    except Exception as e:
+        try:
+            print(f"RAG answer for a feedback question failed: {e}")
+        except UnicodeEncodeError:
+            print("RAG answer for a feedback question failed (error message omitted)")
+        log("error")
+        return None
+
+    numbers = verdict.get("sources") or []
+    valid = sorted({n for n in numbers if isinstance(n, int) and 1 <= n <= len(chunks)})
+    invalid = len([n for n in numbers if not (isinstance(n, int) and 1 <= n <= len(chunks))])
+    cited_chunks = [chunks[n - 1] for n in valid]
+    cited = [c["citation"] for c in cited_chunks]
+    answer = _strip_inline_citations(verdict.get("answer") or "")
+
+    if verdict.get("secondary_issue"):
+        log("secondary_issue", retrieved, None, cited, invalid, tokens)
+        return None
+    if not verdict.get("covered") or not cited_chunks or not answer:
+        log("not_covered", retrieved, answer or None, cited, invalid, tokens)
+        return None
+    log("answered", retrieved, answer, cited, invalid, tokens)
+    return f"{answer}\n\n{_source_line(cited_chunks)}"

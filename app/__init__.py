@@ -43,7 +43,9 @@ from app.models.pending_feedback import init_pending_feedback_table
 from app.models.rag import init_rag_tables
 from app.models.pending_exec_role import init_pending_exec_role_table
 from app.models.attendance_marking import init_attendance_markings_table
+from app.models.member_question import init_member_question_tables
 from app.services.reporting import send_weekly_digest
+from app.services.feedback_themes import sort_pending_feedback
 from app.services.scheduler import start_scheduler, register_task, register_every_check_task
 from app.services.escalation import follow_up_unclaimed_cases
 from app.services.attendance import send_bible_study_nudges
@@ -87,6 +89,7 @@ def create_app():
     init_rag_tables()
     init_pending_exec_role_table()
     init_attendance_markings_table()
+    init_member_question_tables()
 
     run_workers = _should_run_background_workers()
     if run_workers:
@@ -117,6 +120,10 @@ def create_app():
     # absence the sweep itself just created has already landed before
     # this looks for absences whose reward window has passed.
     register_task("bandit_reward_computation", weekday=None, hour=13, func=compute_pending_rewards)
+
+    # 14:00, every day -- sorts new feedback replies into themes (batched,
+    # after the noon sweep and 1pm reward job). See feedback_themes.py.
+    register_task("feedback_theme_sorting", weekday=None, hour=14, func=sort_pending_feedback)
 
     # Sunday 08:00 -- the weekly summary to every exec leader (Keziah's timing).
     register_task("weekly_leadership_digest", weekday=6, hour=8, func=send_weekly_digest)

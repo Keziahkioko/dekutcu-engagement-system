@@ -51,7 +51,10 @@ from datetime import datetime, timezone, timedelta, date
 from app.models.feedback_request import (
     create_feedback_request,
     record_feedback_response,
+    set_theme,
 )
+from app.services import rag_companion
+from app.services import member_questions
 from app.models.pending_feedback import (
     get_pending_feedback,
     start_pending_feedback,
@@ -70,8 +73,11 @@ _IS_FEEDBACK_SYSTEM_PROMPT = (
     "suggestion, question or challenge about the session, or about how they're "
     "doing) or is instead an unrelated message to the bot (e.g. asking when "
     "the next event is, asking about their group, a greeting unrelated to the "
-    "session). Respond with ONLY a JSON object: {\"is_feedback\": true} or "
-    "{\"is_feedback\": false}."
+    "session). Also decide whether the reply ASKS something the member wants answered "
+    "about the session or the CU (e.g. 'why did we start so late today?', 'will the songs "
+    "we sang be shared?', 'can I vote at the AGM?') -- not a rhetorical remark. Respond "
+    "with ONLY a JSON object: "
+    "{\"is_feedback\": true or false, \"is_question\": true or false}."
 )
 
 
@@ -109,7 +115,13 @@ def _is_expired(pending):
     return datetime.now(timezone.utc) - created_at > timedelta(hours=_EXPIRY_HOURS)
 
 
-def _is_feedback(text):
+def _classify_reply(text):
+    """
+    Returns (is_feedback, is_question) from ONE model call. is_question
+    was added to the check that already existed, so spotting a question
+    immediately costs nothing extra (Keziah wanted the "answered up to a
+    day later" trade-off avoided -- see member_questions.py).
+    """
     try:
         response = create_chat_completion(
             messages=[
@@ -120,16 +132,16 @@ def _is_feedback(text):
             temperature=0,
         )
         parsed = json.loads(response.choices[0].message.content)
-        return bool(parsed.get("is_feedback", True))
+        return bool(parsed.get("is_feedback", True)), bool(parsed.get("is_question", False))
     except Exception as e:
-        # Defaults to True -- recording an off-topic message as feedback
+        # Defaults to feedback -- recording an off-topic message as feedback
         # is a minor data blemish; the alternative (dropping it through
         # to normal routing) would also skip the severity check below.
         try:
             print(f"Feedback relevance check failed, treating as feedback: {e}")
         except UnicodeEncodeError:
             print("Feedback relevance check failed, treating as feedback (error message omitted -- contained non-ASCII characters)")
-        return True
+        return True, False
 
 
 def handle_feedback_message(whatsapp_id, message_text):
@@ -155,12 +167,13 @@ def handle_feedback_message(whatsapp_id, message_text):
         record_feedback_response(request_id, None, None, _now())
         return "No problem -- thanks anyway!"
 
-    if not _is_feedback(text):
+    is_feedback, is_question = _classify_reply(text)
+    if not is_feedback:
         delete_pending_feedback(whatsapp_id)
         return None
 
     delete_pending_feedback(whatsapp_id)
-    return _record_and_respond(whatsapp_id, request_id, text)
+    return _record_and_respond(whatsapp_id, request_id, text, is_question)
 
 
 def record_unprompted_feedback(whatsapp_id, reg_number, text):
@@ -178,8 +191,15 @@ def record_unprompted_feedback(whatsapp_id, reg_number, text):
     return _record_and_respond(whatsapp_id, request_id, text.strip())
 
 
-def _record_and_respond(whatsapp_id, request_id, text):
-    """Shared by prompted and unprompted feedback: one safety check, one way of escalating."""
+def _record_and_respond(whatsapp_id, request_id, text, is_question=False):
+    """
+    Shared by prompted and unprompted feedback: one safety check, one way
+    of escalating. A QUESTION (with no distress) is answered from
+    DeKUTCU's materials if they cover it -- with the member's way out,
+    "reply ASK and I'll pass it to a leader" -- and otherwise relayed to
+    the leaders anonymously (member_questions.py). Safety comes first:
+    a question that also shows distress goes through escalation instead.
+    """
     severity = escalation.assess_severity(text)
     record_feedback_response(request_id, text, severity, _now())
 
@@ -189,5 +209,16 @@ def _record_and_respond(whatsapp_id, request_id, text):
 
     if severity == "distress":
         return escalation.start_consent_flow(whatsapp_id, "feedback", text)
+
+    if is_question:
+        set_theme(request_id, "question")  # known now -- no need to wait for the 2pm sort
+        member = get_member_by_whatsapp_id(whatsapp_id)
+        answer = rag_companion.answer_from_materials(member, text)
+        if answer:
+            return (
+                "Thanks for your feedback! Here's what I found on your question:\n\n"
+                f"{answer}\n\n{member_questions.offer_ask(whatsapp_id, text, request_id)}"
+            )
+        return f"Thanks for your feedback! {member_questions.relay_to_leaders(member, text, request_id)}"
 
     return "Thanks for sharing -- it really helps the leadership team."

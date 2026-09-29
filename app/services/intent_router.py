@@ -95,7 +95,7 @@ RESUME_KEYWORDS = {"resume"}
 # label means. Keep these short and behavior-focused.
 INTENT_DEFINITIONS = {
     "greeting_smalltalk": "Casual greeting, small talk, thanks, or chit-chat with no specific request.",
-    "general_question": "A general question about the organization, its beliefs, or its activities -- NOT about specific Bible study groups, group leaders, or group membership. Even a short follow-up like 'what about X' or 'and Y?' belongs to group_query instead if the conversation was just discussing groups/leaders/membership -- don't default here just because the message doesn't say the word 'group'.",
+    "general_question": "A general question about the organization, its beliefs, its constitution, or its activities -- NOT about specific Bible study groups, group leaders, or group membership, and NOT about what members have said, recommended or reported (feedback, suggestions, attendance -- those are leadership_query). Even a short follow-up like 'what about X' or 'and Y?' belongs to group_query instead if the conversation was just discussing groups/leaders/membership -- don't default here just because the message doesn't say the word 'group'.",
     "pastoral_question": "A personal or pastoral question about the member's OWN spiritual life, relationships, struggles or a decision they face, asking for guidance rather than information (e.g. 'I keep falling into the same sin, what should I do?', 'should I leave my church?') -- WITHOUT signs of real distress or crisis (that is needs_support).",
     "list_events": "Asking what events or activities are coming up -- a read-only question, NOT wanting to RSVP.",
     "event_rsvp": "Wanting to RSVP (yes/no/maybe) to a specific upcoming event -- NOT just asking what's coming up.",
@@ -110,7 +110,7 @@ INTENT_DEFINITIONS = {
     "request_human": "Explicitly asking to speak with, be contacted by, or reach a real person, a leader, or 'someone in charge' (including a 'group admin'), or asking for a leader's phone number.",
     "contact_info": "Asking for DeKUTCU's official contact details -- how to contact the CU, its office or secretary, a phone number or email for the CU. NOT asking for a specific leader's personal number.",
     "needs_support": "Message shows real distress or a serious personal struggle, even without explicitly asking for a human.",
-    "leadership_query": "A leader or group leader asking for a report or data about how the CU or THEIR GROUP is doing -- attendance (including 'how is my group's attendance'), who's been missing, why people miss, escalation cases, feedback, questions members asked the bot, membership numbers, event RSVPs, or evaluation numbers.",
+    "leadership_query": "A leader or group leader asking for a report or data about how the CU or THEIR GROUP is doing -- attendance (including 'how is my group's attendance'), who's been missing, why people miss, escalation cases, what members have said in feedback (comments, questions, recommendations/suggestions, challenges they face), questions members asked the bot, membership numbers, event RSVPs, or evaluation numbers. A question about what MEMBERS have said, suggested or reported is this -- not a question about the constitution.",
     "send_announcement": "A leader wanting to broadcast a message to all members.",
     "allocate_groups": "A leader wanting to place new (ungrouped) members into Bible study groups.",
     "reshuffle_groups": "A leader wanting to fully regenerate every group from scratch, discarding existing placements.",

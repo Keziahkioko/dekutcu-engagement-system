@@ -31,6 +31,7 @@ from app.models.pending_reason_capture import get_pending_reason_capture
 from app.models.pending_escalation_consent import get_pending_escalation_consent
 from app.models.pending_feedback import get_pending_feedback
 from app.models.pending_exec_role import get_pending_exec_role
+from app.models.member_question import get_pending_question_ask
 from app.models.pending_message import (
     enqueue_message,
     claim_next_message,
@@ -54,6 +55,7 @@ from app.services import reason_capture
 from app.services import escalation
 from app.services import feedback
 from app.services import exec_roles
+from app.services import member_questions
 from app.services.whatsapp_client import send_whatsapp_message
 
 webhook_bp = Blueprint("webhook", __name__)
@@ -216,6 +218,12 @@ def route_incoming_message(sender_number, message_text):
             reply = escalation.handle_claim(sender_number, message_text)
             if reply is not None:
                 return reply
+        # A leader answering a member's relayed question ("ANSWER 12 ...") --
+        # same early placement and fall-through as CLAIM.
+        if member_questions.is_answer_message(message_text):
+            reply = member_questions.handle_answer(sender_number, message_text)
+            if reply is not None:
+                return reply
         if get_pending_action(sender_number) is not None:
             return handle_pending_action_response(sender_number, message_text)
         if get_pending_leader_nomination(sender_number) is not None:
@@ -251,6 +259,12 @@ def route_incoming_message(sender_number, message_text):
             # message (expired, or not actually feedback -- see
             # feedback.py) and let it fall through to normal routing.
             reply = feedback.handle_feedback_message(sender_number, message_text)
+            if reply is not None:
+                return reply
+        if get_pending_question_ask(sender_number) is not None:
+            # "Reply ASK and I'll pass it to a leader" -- anything else drops
+            # the offer and the message is routed normally.
+            reply = member_questions.handle_ask_reply(sender_number, message_text)
             if reply is not None:
                 return reply
         return handle_intent_message(sender_number, message_text)

@@ -193,8 +193,9 @@ def escalation_summary(asker_reg_number, days=30):
     }
 
 
-def feedback_summary(days=30):
+def feedback_summary(days=30, theme=None):
     days = _days(days)
+    theme = theme if theme in ("feedback", "question", "recommendation", "challenge") else None
     by_channel = _q(f"""
         SELECT trigger, COUNT(*) AS sent, COUNT(responded_at) AS responded
         FROM feedback_requests
@@ -202,16 +203,29 @@ def feedback_summary(days=30):
         GROUP BY trigger
     """, (days,))
     recent = _q(f"""
-        SELECT activity_type, activity_date, response_text FROM feedback_requests
+        SELECT activity_type, activity_date, response_text, theme FROM feedback_requests
         WHERE response_text IS NOT NULL AND COALESCE(severity, 'none') = 'none'
           AND responded_at >= {_UTC_NOW} - (%s * INTERVAL '1 day')
+          AND (%s::text IS NULL OR theme = %s)
         ORDER BY responded_at DESC LIMIT 10
+    """, (days, theme, theme))
+    themes = _q(f"""
+        SELECT COALESCE(theme, 'not yet sorted') AS theme, COUNT(*) AS n FROM feedback_requests
+        WHERE response_text IS NOT NULL AND COALESCE(severity, 'none') = 'none'
+          AND responded_at >= {_UTC_NOW} - (%s * INTERVAL '1 day')
+        GROUP BY 1
     """, (days,))
     counts = _q(f"""
         SELECT COUNT(*) FILTER (WHERE trigger = 'unprompted') AS unprompted,
                COUNT(*) FILTER (WHERE severity IN ('distress', 'acute_risk')) AS flagged
         FROM feedback_requests WHERE responded_at >= {_UTC_NOW} - (%s * INTERVAL '1 day')
     """, (days,))[0]
+    questions = _q(f"""
+        SELECT id, question, answered_at IS NOT NULL AS answered,
+               EXTRACT(EPOCH FROM ({_UTC_NOW} - created_at)) / 86400 AS days_waiting
+        FROM member_questions WHERE created_at >= {_UTC_NOW} - (%s * INTERVAL '1 day')
+        ORDER BY created_at
+    """, (days,))
     sent = sum(r["sent"] for r in by_channel)
     responded = sum(r["responded"] for r in by_channel)
     return {
@@ -221,8 +235,18 @@ def feedback_summary(days=30):
                         "response_rate_percent": _pct(r["responded"], r["sent"])} for r in by_channel],
         "unprompted_feedback_count": counts["unprompted"],
         "flagged_as_distress_count": counts["flagged"],
-        "recent_feedback_anonymous": [{"activity": display_name_for(r["activity_type"]),
-                                       "date": str(r["activity_date"]), "text": r["response_text"]} for r in recent],
+        "themes": {r["theme"]: r["n"] for r in themes},
+        "questions_relayed_to_leaders": {
+            "total": len(questions),
+            "answered": sum(q["answered"] for q in questions),
+            "awaiting_answer_anonymous": [
+                {"number": q["id"], "question": q["question"], "days_waiting": round(float(q["days_waiting"]), 1)}
+                for q in questions if not q["answered"]],
+            "how_to_answer": "Reply ANSWER <number> followed by the answer; it's sent to the member, who stays anonymous.",
+        },
+        "showing_theme": theme or "all",
+        "recent_feedback_anonymous": [{"activity": display_name_for(r["activity_type"]), "date": str(r["activity_date"]),
+                                       "theme": r["theme"] or "not yet sorted", "text": r["response_text"]} for r in recent],
         "note": "Feedback is anonymous; replies flagged as distress are counted but never shown.",
     }
 
@@ -323,7 +347,10 @@ def _build_tools(member):
             _tool("lapsing_members", "Members currently missing sessions repeatedly (2+ in a row), with the reason category."),
             _tool("absence_reasons", "Counts of why members missed sessions, by category.", _DAYS_PROP),
             _tool("escalation_summary", "Escalation cases: totals, claimed/unclaimed, response times, open cases.", _DAYS_PROP),
-            _tool("feedback_summary", "Feedback response rates per channel and recent anonymous feedback.", _DAYS_PROP),
+            _tool("feedback_summary", "Feedback response rates per channel, counts per theme, and recent anonymous feedback "
+                  "(optionally only one theme).", {**_DAYS_PROP, "theme": {
+                      "type": "string", "enum": ["feedback", "question", "recommendation", "challenge"],
+                      "description": "Only show feedback of this theme, e.g. 'recommendation' for suggestions members made."}}),
             _tool("companion_questions", "What members asked the RAG companion, especially questions the materials didn't cover.", _DAYS_PROP),
             _tool("membership_summary", "Registrations, new members, group placement, opt-outs, leaders.", _DAYS_PROP),
             _tool("event_rsvps", "Upcoming events with RSVP counts."),
@@ -334,7 +361,7 @@ def _build_tools(member):
             "lapsing_members": lambda **kw: lapsing_members(),
             "absence_reasons": lambda days=30, **kw: absence_reasons(days),
             "escalation_summary": lambda days=30, **kw: escalation_summary(member["reg_number"], days),
-            "feedback_summary": lambda days=30, **kw: feedback_summary(days),
+            "feedback_summary": lambda days=30, theme=None, **kw: feedback_summary(days, theme),
             "companion_questions": lambda days=30, **kw: companion_questions(days),
             "membership_summary": lambda days=30, **kw: membership_summary(days),
             "event_rsvps": lambda **kw: event_rsvps(),
@@ -413,6 +440,17 @@ def build_weekly_digest():
         lines.append(f"Escalations this week: {esc['total_cases']}, all claimed.")
     rate = fb["overall_response_rate_percent"]
     lines.append(f"Feedback response rate: {rate}%." if rate is not None else "Feedback: no requests sent this week.")
+    sorted_themes = {t: n for t, n in fb["themes"].items() if t != "not yet sorted"}
+    if sorted_themes:
+        order = ["feedback", "question", "recommendation", "challenge"]
+        parts = [f"{sorted_themes[t]} {'comment' if t == 'feedback' else t}{'s' if sorted_themes[t] != 1 else ''}"
+                 for t in order if t in sorted_themes]
+        lines.append("Feedback: " + ", ".join(parts) + ".")
+    waiting = feedback_summary(365)["questions_relayed_to_leaders"]["awaiting_answer_anonymous"]
+    if waiting:
+        lines.append(f"*Members' questions awaiting an answer: {len(waiting)}*")
+        lines += [f"  #{w['number']}: \"{w['question']}\"" for w in waiting[:5]]
+        lines.append("  Reply ANSWER <number> followed by your answer.")
     uncovered = cq["not_covered_general_questions_anonymous"]
     if uncovered:
         lines.append(f"Questions the materials didn't cover: {len(uncovered)} -- worth adding material on.")
