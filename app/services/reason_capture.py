@@ -59,11 +59,41 @@ def _now():
 
 
 def build_reason_prompt(activity_description, name=None):
+    """
+    For Bible Study, where a LEADER marked the member absent -- the only
+    case where the bot genuinely "noticed". The other two situations get
+    their own wording below: found in the first live test, a member who
+    had just replied "no" was told "We noticed you weren't able to make
+    it", which read like surveillance.
+    """
     greeting = f"Hey {name.split()[0]}, we" if name else "We"
     return (
         f"{greeting} noticed you weren't able to make it to {activity_description}. "
         "Would you mind sharing why? This helps us support you better.\n\n"
         "Reply 'skip' if you'd rather not say."
+    )
+
+
+def build_live_reason_prompt(name=None):
+    """The member has JUST told us they weren't there (a bare "no" to a check-in)."""
+    thanks = f"Thanks for letting us know, {name.split()[0]}." if name else "Thanks for letting us know."
+    return (
+        f"{thanks} Would you mind sharing what kept you away? It helps us support you better.\n\n"
+        "Reply 'skip' if you'd rather not say."
+    )
+
+
+def build_silence_reason_prompt(activity_description, name=None):
+    """
+    A regular didn't reply to the check-in (the noon sweep). Absence is only
+    INFERRED from silence -- they may have been there and just not replied --
+    so this never states as fact that they weren't.
+    """
+    greeting = f"Hey {name.split()[0]}, we" if name else "We"
+    return (
+        f"{greeting} didn't hear back after yesterday's {activity_description} check-in, "
+        "and we missed you! If you weren't able to make it, would you mind sharing what "
+        "kept you away?\n\nReply 'skip' if you'd rather not say."
     )
 
 

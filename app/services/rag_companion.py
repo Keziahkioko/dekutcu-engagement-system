@@ -63,14 +63,11 @@ TOP_K = 8
 # being "born again" -- a salvation claim the constitution never makes.
 DOCTRINAL_BASIS_PREFIX = "DeKUTCU Constitution, Art. 11("
 
-NOT_COVERED_TEXT = (
-    "That isn't something DeKUTCU's materials that I can draw on cover, so I'd "
-    "rather not guess."
-)
+NOT_COVERED_TEXT = "I couldn't find that in DeKUTCU's materials, so I'd rather not guess."
 SECONDARY_ISSUE_TEXT = (
-    "DeKUTCU is a non-denominational fellowship of believers from different "
-    "churches, so it doesn't take a position on this. It's a great question to "
-    "explore with a leader or with your own church."
+    "I can only answer from DeKUTCU's materials, and DeKUTCU is a non-denominational "
+    "fellowship of believers from different churches, so it doesn't take a position "
+    "on this. It's a great question to explore with a leader or with your own church."
 )
 ERROR_TEXT = "Sorry, I couldn't look that up right now -- please try again in a little while."
 

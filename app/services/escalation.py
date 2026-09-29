@@ -226,7 +226,11 @@ def start_consent_flow(whatsapp_id, trigger_type, context_text):
     if recent:
         return _already_in_hand(recent)
     start_pending_escalation_consent(whatsapp_id, trigger_type, context_text, _now())
+    # Acknowledge first -- found in the first live test: "I was just feeling
+    # down" got the consent question with nothing before it. One fixed,
+    # model-free sentence, used wherever distress is detected.
     return (
+        "I'm really sorry things have been hard. Thank you for being honest with me.\n\n"
         "Would it be okay if I let one of your leaders know, so they can check in "
         "with you?\n\nReply YES or NO."
     )

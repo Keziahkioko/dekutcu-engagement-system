@@ -210,7 +210,7 @@ def handle_checkin_message(whatsapp_id, message_text):
         # the person currently replying, so this goes through the
         # normal return-based reply path, not a separate direct send.
         reason_capture.begin_reason_capture(whatsapp_id, absence_id)
-        return reason_capture.build_reason_prompt(display_name)
+        return reason_capture.build_live_reason_prompt(member["name"])
 
     # Substantive text -- already both the absence signal AND the
     # reason in one message, so classify it directly rather than
@@ -272,7 +272,7 @@ def process_stale_checkins():
         absence_id = create_absence(member["reg_number"], activity_type, checkin_date, _now())
         if not member["followup_consent"]:
             continue
-        message = reason_capture.build_reason_prompt(display_name_for(activity_type))
+        message = reason_capture.build_silence_reason_prompt(display_name_for(activity_type), member["name"])
         response = send_whatsapp_message(whatsapp_id, message)
         if response.status_code == 200:
             reason_capture.begin_reason_capture(whatsapp_id, absence_id)

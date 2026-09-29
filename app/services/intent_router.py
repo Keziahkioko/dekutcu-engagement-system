@@ -858,7 +858,32 @@ def handle_message(whatsapp_id, message_text):
 # ---------------------------------------------------------------------
 
 def _handle_unclear(member, text):
-    return "Sorry, I didn't quite catch that. Could you rephrase, or let me know what you're looking for?"
+    """
+    Says what the bot CAN do -- found in the first live test, two "didn't
+    catch that" replies in a row left the member with no idea what to try.
+    """
+    return (
+        "Sorry, I didn't quite catch that. I can help with things like what the CU "
+        "believes or how it's run, your Bible Study group, upcoming events, or "
+        "connecting you with a leader. What would you like to know?"
+    )
+
+
+_THANKS = re.compile(r"\b(thanks?|thank you|thx|asante|appreciate(?:d)?)\b", re.IGNORECASE)
+_GOODBYE = re.compile(r"\b(bye|goodbye|good ?night|see you|later|take care)\b", re.IGNORECASE)
+
+
+def _handle_smalltalk(member, text):
+    """
+    Found in the first live test: "Thank you" got "Hey Keziah! How can I
+    help?" -- every greeting, thanks or goodbye got the same line.
+    """
+    first = member["name"].split()[0]
+    if _THANKS.search(text):
+        return f"You're welcome, {first}! 😊"
+    if _GOODBYE.search(text):
+        return f"Take care, {first}! God bless."
+    return f"Hey {first}! How can I help?"
 
 
 def _handle_stub(feature_name):
@@ -868,7 +893,7 @@ def _handle_stub(feature_name):
 
 
 _STUB_HANDLERS = {
-    "greeting_smalltalk": lambda member, text: f"Hey {member['name'].split()[0]}! How can I help?",
+    "greeting_smalltalk": _handle_smalltalk,
     "general_question": _handle_general_question,
     "pastoral_question": _handle_pastoral_question,
     "list_events": _handle_list_events,
