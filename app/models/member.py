@@ -131,6 +131,30 @@ def init_members_table():
         ALTER TABLE members
         ADD COLUMN IF NOT EXISTS bandit_control_group BOOLEAN
     """)
+    # Exec office held (one of the Art. 21 offices -- see
+    # app/services/exec_roles.py), NULL if none. Added after the first live
+    # test showed "Who is the chairperson?" could never be answered: the
+    # system only knew WHETHER someone is a leader (is_leader), not which
+    # office they hold. Deliberately independent of is_leader -- recording
+    # an office never grants leader permissions by itself. The partial
+    # unique index lets the database itself guarantee one holder per office.
+    cursor.execute("""
+        ALTER TABLE members
+        ADD COLUMN IF NOT EXISTS exec_office TEXT
+    """)
+    cursor.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS members_one_holder_per_exec_office
+        ON members (exec_office) WHERE exec_office IS NOT NULL
+    """)
+    # Holding an exec office makes someone a leader (Keziah's decision).
+    # leader_via_office remembers who became a leader BECAUSE of an office,
+    # so only they lose leader access when they stop holding one -- people
+    # made leaders any other way (e.g. Keziah, a patron) are never touched.
+    # Without this, every past exec would keep leader powers indefinitely.
+    cursor.execute("""
+        ALTER TABLE members
+        ADD COLUMN IF NOT EXISTS leader_via_office BOOLEAN DEFAULT FALSE NOT NULL
+    """)
 
     conn.commit()
     cursor.close()
@@ -530,6 +554,88 @@ def get_pending_reassignments():
     cursor.close()
     conn.close()
     return rows
+
+
+def get_exec_office_holders():
+    """{office: member row} for every office currently held."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM members WHERE exec_office IS NOT NULL")
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return {row["exec_office"]: row for row in rows}
+
+
+def _revoke_office_leaders(cursor, reg_numbers):
+    """
+    Of these members, anyone who now holds NO office and became a leader
+    only through one loses leader access. Returns their rows (before the
+    change), so callers can tell them and the recording leader.
+    """
+    if not reg_numbers:
+        return []
+    cursor.execute("""
+        UPDATE members SET is_leader = FALSE, leader_via_office = FALSE
+        WHERE reg_number IN %s AND exec_office IS NULL AND leader_via_office = TRUE
+        RETURNING *
+    """, (tuple(reg_numbers),))
+    return cursor.fetchall()
+
+
+def set_exec_office(office, reg_number):
+    """
+    Records `reg_number` as holding `office`, in one transaction: the
+    office's previous holder (if any) is cleared, and so is any other
+    office this member held -- one office per person, one person per
+    office (Art. 21). The holder becomes a leader if they weren't one
+    (marked leader_via_office); a previous holder left with no office,
+    who was a leader only through it, loses leader access. Returns the
+    rows of anyone whose access was removed.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT reg_number FROM members WHERE exec_office = %s AND reg_number <> %s",
+                       (office, reg_number))
+        displaced = [r["reg_number"] for r in cursor.fetchall()]
+        cursor.execute("UPDATE members SET exec_office = NULL WHERE exec_office = %s OR reg_number = %s",
+                       (office, reg_number))
+        cursor.execute("""
+            UPDATE members
+            SET exec_office = %s,
+                leader_via_office = CASE WHEN is_leader THEN leader_via_office ELSE TRUE END,
+                is_leader = TRUE
+            WHERE reg_number = %s
+        """, (office, reg_number))
+        revoked = _revoke_office_leaders(cursor, displaced)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+    return revoked
+
+
+def clear_exec_office(office):
+    """Leaves `office` vacant; its holder loses leader access if they had it only through the office. Returns revoked rows."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT reg_number FROM members WHERE exec_office = %s", (office,))
+        holders = [r["reg_number"] for r in cursor.fetchall()]
+        cursor.execute("UPDATE members SET exec_office = NULL WHERE exec_office = %s", (office,))
+        revoked = _revoke_office_leaders(cursor, holders)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+    return revoked
 
 
 def get_all_leaders():

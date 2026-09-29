@@ -40,6 +40,7 @@ from app.models.checkin_broadcast import init_checkin_broadcasts_table
 from app.models.feedback_request import init_feedback_requests_table
 from app.models.pending_feedback import init_pending_feedback_table
 from app.models.rag import init_rag_tables
+from app.models.pending_exec_role import init_pending_exec_role_table
 from app.services.scheduler import start_scheduler, register_task
 from app.services.attendance import send_bible_study_nudges
 from app.services.fellowship_checkin import send_fellowship_checkin, process_stale_checkins, TRACKED_WEEKDAYS
@@ -80,6 +81,7 @@ def create_app():
     init_feedback_requests_table()
     init_pending_feedback_table()  # after feedback_requests -- it references that table
     init_rag_tables()
+    init_pending_exec_role_table()
 
     start_message_worker()
 

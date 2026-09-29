@@ -30,6 +30,7 @@ from app.models.pending_fellowship_checkin import get_pending_fellowship_checkin
 from app.models.pending_reason_capture import get_pending_reason_capture
 from app.models.pending_escalation_consent import get_pending_escalation_consent
 from app.models.pending_feedback import get_pending_feedback
+from app.models.pending_exec_role import get_pending_exec_role
 from app.models.pending_message import (
     enqueue_message,
     claim_next_message,
@@ -52,6 +53,7 @@ from app.services import fellowship_checkin
 from app.services import reason_capture
 from app.services import escalation
 from app.services import feedback
+from app.services import exec_roles
 from app.services.whatsapp_client import send_whatsapp_message
 
 webhook_bp = Blueprint("webhook", __name__)
@@ -222,6 +224,8 @@ def route_incoming_message(sender_number, message_text):
             return area_change.handle_message(sender_number, message_text)
         if get_pending_reassignment_resolution(sender_number) is not None:
             return area_change.handle_resolution_message(sender_number, message_text)
+        if get_pending_exec_role(sender_number) is not None:
+            return exec_roles.handle_message(sender_number, message_text)
         if get_pending_event_creation(sender_number) is not None:
             return event_manager.handle_create_event_message(sender_number, message_text)
         if get_pending_rsvp(sender_number) is not None:

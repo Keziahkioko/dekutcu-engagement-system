@@ -82,6 +82,7 @@ from app.services import fellowship_checkin
 from app.services import feedback
 from app.services import rag_companion
 from app.services import org_contacts
+from app.services import exec_roles
 from app.services.message_generator import display_name_for
 from app.services.group_query import answer_group_question
 from app.services.llm_client import create_chat_completion
@@ -112,7 +113,8 @@ INTENT_DEFINITIONS = {
     "send_announcement": "A leader wanting to broadcast a message to all members.",
     "allocate_groups": "A leader wanting to place new (ungrouped) members into Bible study groups.",
     "reshuffle_groups": "A leader wanting to fully regenerate every group from scratch, discarding existing placements.",
-    "group_query": "A question about Bible study groups, group leaders, or group membership -- e.g. which group someone is in, who's in a group, how many groups exist, a summary of how allocation went, or who leads a group.",
+    "group_query": "A question about Bible study groups, group leaders, group membership, or who holds an exec office -- e.g. which group someone is in, who's in a group, how many groups exist, a summary of how allocation went, who leads a group, or who the chairperson/secretary/any exec member is.",
+    "set_exec_roles": "A leader wanting to record or update who holds the exec offices (chairperson, secretary, directors, etc.), e.g. after the AGM.",
     "nominate_group_leader": "A leader wanting to nominate or assign someone as a Bible study group leader for an area.",
     "view_group_leaders": "A leader wanting to see who the group leaders are -- confirmed, pending, or areas with no leader yet.",
     "resolve_pending_leader": "A leader wanting to manually confirm that a pending group-leader candidate has accepted, e.g. because they agreed in person rather than replying on WhatsApp.",
@@ -127,7 +129,7 @@ VALID_INTENTS = set(INTENT_DEFINITIONS.keys())
 LEADER_ONLY_INTENTS = {
     "leadership_query", "send_announcement", "allocate_groups", "reshuffle_groups",
     "nominate_group_leader", "view_group_leaders", "resolve_pending_leader", "remove_group_leader",
-    "resolve_reassignments", "create_event", "send_checkin",
+    "resolve_reassignments", "create_event", "send_checkin", "set_exec_roles",
 }
 
 # Guards against two allocation runs (each ~10-15 seconds) overlapping
@@ -920,5 +922,6 @@ _STUB_HANDLERS = {
     "remove_group_leader": _handle_remove_group_leader,
     "resolve_reassignments": _handle_resolve_reassignments,
     "send_checkin": _handle_send_checkin,
+    "set_exec_roles": lambda member, text: exec_roles.start(member["whatsapp_id"]),
     "unclear": _handle_unclear,
 }

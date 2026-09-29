@@ -34,6 +34,7 @@ import re
 import json
 
 from app.services import org_contacts
+from app.services import exec_roles
 from app.models.member import (
     get_group_members,
     get_leader_of_group,
@@ -46,7 +47,9 @@ from app.services.llm_client import create_chat_completion
 
 _SYSTEM_PROMPT = (
     "You answer a DeKUTCU Bible Study member's question about groups, group "
-    "leaders, or group membership, using ONLY the tools provided -- never guess "
+    "leaders, group membership, or who holds an exec office (use "
+    "get_exec_committee for that -- a null holder means the office isn't "
+    "recorded yet; say so, never guess a name), using ONLY the tools provided -- never guess "
     "or make up group names, leader names, or member names. Keep replies short "
     "and conversational, suitable for WhatsApp. "
     "WhatsApp does NOT render markdown tables, headers, or links -- for lists, "
@@ -254,8 +257,26 @@ def _build_tools_and_dispatch(member):
             ),
             "parameters": {"type": "object", "properties": {}},
         },
+    }, {
+        "type": "function",
+        "function": {
+            "name": "get_exec_committee",
+            "description": (
+                "Get who holds each Executive Committee office (chairperson, vice "
+                "chairpersons, secretaries, finance secretary, ministry directors). "
+                "Names only. Offices with holder null are vacant or not yet recorded."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
     }]
-    dispatch = {"get_my_group": lambda **kw: _tool_get_my_group(member)}
+    dispatch = {
+        "get_my_group": lambda **kw: _tool_get_my_group(member),
+        # Exec names are public within the CU, so every member gets this --
+        # names only; personal numbers are never shared with members.
+        "get_exec_committee": lambda **kw: {
+            "offices": [{"office": office, "holder": name} for office, name in exec_roles.committee_summary()]
+        },
+    }
 
     if member["leads_group_label"]:
         tools.append({

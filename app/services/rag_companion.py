@@ -64,6 +64,7 @@ TOP_K = 8
 DOCTRINAL_BASIS_PREFIX = "DeKUTCU Constitution, Art. 11("
 
 NOT_COVERED_TEXT = "I couldn't find that in DeKUTCU's materials, so I'd rather not guess."
+NOT_COVERED_HINT = "A leader would know -- just say \"I'd like to talk to a leader\" if you'd like one to get in touch."
 SECONDARY_ISSUE_TEXT = (
     "I can only answer from DeKUTCU's materials, and DeKUTCU is a non-denominational "
     "fellowship of believers from different churches, so it doesn't take a position "
@@ -267,7 +268,13 @@ def answer_question(member, question, pastoral=False):
     answer = _strip_inline_citations(verdict.get("answer") or "")
     if not verdict.get("covered") or not cited_chunks or not answer:
         log(severity, "not_covered", retrieved, answer or None, cited, invalid, tokens)
-        return f"{NOT_COVERED_TEXT}\n\n{leader_question('rag_not_covered')}"
+        if pastoral or severity == "distress":
+            return f"{NOT_COVERED_TEXT}\n\n{leader_question('rag_not_covered')}"
+        # A plain factual gap gets a hint, not an offer of personal contact
+        # (Keziah's decision after the live test: "Who is the chairperson?"
+        # ending in "a leader will reach out to you personally" was out of
+        # proportion). Nothing is held open -- the member decides.
+        return f"{NOT_COVERED_TEXT} {NOT_COVERED_HINT}"
 
     log(severity, "answered", retrieved, answer, cited, invalid, tokens)
     reply = f"{answer}\n\n{_source_line(cited_chunks)}"
