@@ -126,3 +126,50 @@ def my_group(member):
         lapsing=reporting.lapsing_members(group_label=group)["members"],
         bible_study_weekly=dashboard.bible_study_weekly(days, group_label=group),
     )
+
+
+@dashboard_bp.context_processor
+def _navigation():
+    """The exec pages beyond Overview, shown in the header for exec leaders."""
+    return {"extra_pages": [("Care & feedback", "dashboard.care"),
+                            ("Companion & members", "dashboard.community"),
+                            ("Evaluation", "dashboard.evaluation")]}
+
+
+@dashboard_bp.route("/care")
+@_page("exec")
+def care(member):
+    days = _days()
+    return render_template(
+        "dashboard/care.html", viewer=member, days=days, periods=dashboard.PERIODS, active="care",
+        escalations=reporting.escalation_summary(member["reg_number"], days),
+        escalations_weekly=dashboard.escalations_weekly(days),
+        reasons=reporting.absence_reasons(days)["reason_categories"],
+        feedback=reporting.feedback_summary(days),
+        feedback_weekly=dashboard.feedback_weekly(days),
+    )
+
+
+@dashboard_bp.route("/community")
+@_page("exec")
+def community(member):
+    days = _days()
+    return render_template(
+        "dashboard/community.html", viewer=member, days=days, periods=dashboard.PERIODS, active="community",
+        companion=reporting.companion_questions(days),
+        companion_weekly=dashboard.companion_weekly(days),
+        membership=reporting.membership_summary(days),
+        registrations_weekly=dashboard.registrations_weekly(days),
+        events=reporting.event_rsvps()["upcoming_events"],
+    )
+
+
+@dashboard_bp.route("/evaluation")
+@_page("exec")
+def evaluation(member):
+    days = _days()
+    return render_template(
+        "dashboard/evaluation.html", viewer=member, days=days, periods=dashboard.PERIODS, active="evaluation",
+        evaluation=reporting.evaluation_summary(),
+        arm_share_weekly=dashboard.arm_share_weekly(days),
+    )

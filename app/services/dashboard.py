@@ -91,3 +91,79 @@ def fellowship_weekly(days):
     for r in rows:
         series.setdefault(display_name_for(r["activity_type"]), {})[str(r["week"])] = r["present"]
     return {"weeks": weeks, "series": {name: [by_week.get(w, 0) for w in weeks] for name, by_week in series.items()}}
+
+
+def _weekly(rows, key_field, value_field="n"):
+    """[{week, <key>, n}] -> (weeks, {key: [n per week]}) -- one series per key, zero-filled."""
+    weeks = sorted({str(r["week"]) for r in rows})
+    series = {}
+    for r in rows:
+        series.setdefault(str(r[key_field]), {})[str(r["week"])] = r[value_field]
+    return {"weeks": weeks, "series": {k: [v.get(w, 0) for w in weeks] for k, v in sorted(series.items())}}
+
+
+def escalations_weekly(days):
+    """Cases per week by urgency, plus the median minutes to claim per week."""
+    counts = _q("""
+        SELECT date_trunc('week', created_at)::date AS week, urgency, COUNT(*) AS n
+        FROM escalation_cases WHERE created_at >= (NOW() AT TIME ZONE 'UTC') - (%s * INTERVAL '1 day')
+        GROUP BY 1, 2 ORDER BY 1
+    """, (days,))
+    medians = _q("""
+        SELECT date_trunc('week', created_at)::date AS week,
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (claimed_at - created_at)) / 60) AS median
+        FROM escalation_cases
+        WHERE claimed_at IS NOT NULL AND created_at >= (NOW() AT TIME ZONE 'UTC') - (%s * INTERVAL '1 day')
+        GROUP BY 1 ORDER BY 1
+    """, (days,))
+    result = _weekly(counts, "urgency")
+    by_week = {str(m["week"]): round(float(m["median"])) for m in medians}
+    result["median_minutes_to_claim"] = [by_week.get(w) for w in result["weeks"]]
+    return result
+
+
+def feedback_weekly(days):
+    """Feedback response rate per week (unprompted feedback excluded -- nobody asked, so it isn't a response)."""
+    rows = _q("""
+        SELECT date_trunc('week', sent_at)::date AS week, COUNT(*) AS sent, COUNT(responded_at) AS responded
+        FROM feedback_requests
+        WHERE trigger <> 'unprompted' AND sent_at >= (NOW() AT TIME ZONE 'UTC') - (%s * INTERVAL '1 day')
+        GROUP BY 1 ORDER BY 1
+    """, (days,))
+    return [{"week": str(r["week"]), "sent": r["sent"], "responded": r["responded"],
+             "rate": round(100 * r["responded"] / r["sent"]) if r["sent"] else None} for r in rows]
+
+
+def companion_weekly(days):
+    """RAG companion questions per week by outcome (answered / not covered / secondary issue / escalated / error)."""
+    rows = _q("""
+        SELECT date_trunc('week', created_at)::date AS week, outcome, COUNT(*) AS n
+        FROM rag_queries WHERE created_at >= (NOW() AT TIME ZONE 'UTC') - (%s * INTERVAL '1 day')
+        GROUP BY 1, 2 ORDER BY 1
+    """, (days,))
+    return _weekly(rows, "outcome")
+
+
+def registrations_weekly(days):
+    rows = _q("""
+        SELECT date_trunc('week', registered_at)::date AS week, COUNT(*) AS n
+        FROM members WHERE data_consent AND registered_at >= (NOW() AT TIME ZONE 'UTC') - (%s * INTERVAL '1 day')
+        GROUP BY 1 ORDER BY 1
+    """, (days,))
+    return [{"week": str(r["week"]), "n": r["n"]} for r in rows]
+
+
+def arm_share_weekly(days):
+    """
+    Objective 3 -- policy convergence: which strategy the bandit picked each
+    week (adaptive members only; the control group always gets "reminder").
+    A policy that's learning shifts from roughly even shares toward the
+    strategies that work.
+    """
+    rows = _q("""
+        SELECT date_trunc('week', activity_date)::date AS week, chosen_arm, COUNT(*) AS n
+        FROM absences
+        WHERE chosen_arm IS NOT NULL AND NOT COALESCE(is_control, FALSE) AND activity_date >= CURRENT_DATE - %s
+        GROUP BY 1, 2 ORDER BY 1
+    """, (days,))
+    return _weekly(rows, "chosen_arm")

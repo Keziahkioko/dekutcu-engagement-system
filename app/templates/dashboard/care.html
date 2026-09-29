@@ -1,0 +1,124 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Care & feedback · DeKUTCU Reports{% endblock %}
+{% block content %}
+<div class="cards">
+  <div class="card"><div class="label">Escalations</div><div class="value">{{ escalations.total_cases }}</div>
+    <div class="note">{{ escalations.acute_cases }} acute</div></div>
+  <div class="card"><div class="label">Median time to claim</div>
+    <div class="value">{{ (escalations.median_minutes_to_claim ~ ' min') if escalations.median_minutes_to_claim is not none else '—' }}</div></div>
+  <div class="card"><div class="label">Unclaimed now</div>
+    <div class="value {{ 'warn' if escalations.open_unclaimed_cases }}">{{ escalations.open_unclaimed_cases | length }}</div></div>
+  <div class="card"><div class="label">Needed a reminder</div><div class="value">{{ escalations.needed_a_reminder }}</div>
+    <div class="note">{{ escalations.escalated_to_chair_or_vice_chairs }} went to the Chair/Vice-Chairs</div></div>
+  <div class="card"><div class="label">Feedback response rate</div>
+    <div class="value">{{ feedback.overall_response_rate_percent ~ '%' if feedback.overall_response_rate_percent is not none else '—' }}</div></div>
+  <div class="card"><div class="label">Questions awaiting an answer</div>
+    <div class="value {{ 'warn' if feedback.questions_relayed_to_leaders.awaiting_answer_anonymous }}">{{ feedback.questions_relayed_to_leaders.awaiting_answer_anonymous | length }}</div></div>
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Escalations per week</h2>
+    {% if escalations_weekly.weeks %}<canvas id="escChart"></canvas>
+    {% else %}<div class="empty">No escalations in this period.</div>{% endif %}
+  </div>
+  <div class="panel">
+    <h2>Why members miss sessions</h2>
+    {% if reasons %}<canvas id="reasonChart"></canvas>
+    {% else %}<div class="empty">No absences with reasons in this period.</div>{% endif %}
+    <p class="note">Categories only -- members' own words are never shown.</p>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Open escalation cases</h2>
+  <p class="note">{{ escalations.note }}</p>
+  {% if escalations.open_unclaimed_cases %}
+  <div class="table-wrap"><table>
+    <tr><th>Case</th><th>Member</th><th>Urgency</th><th>Hours waiting</th><th>Reminder sent</th><th>Sent to Chair/Vice-Chairs</th></tr>
+    {% for c in escalations.open_unclaimed_cases %}
+    <tr><td>{{ c.case }}</td><td>{{ c.member or '(not one of yours)' }}</td><td>{{ c.urgency }}</td><td>{{ c.hours_waiting }}</td>
+        <td>{{ 'yes' if c.reminder_sent else 'no' }}</td><td>{{ 'yes' if c.escalated_to_chair else 'no' }}</td></tr>
+    {% endfor %}
+  </table></div>
+  <p class="note">To take a case, reply CLAIM &lt;case&gt; to the bot on WhatsApp.</p>
+  {% else %}<div class="empty">No unclaimed cases -- every escalation has a leader.</div>{% endif %}
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Feedback response rate per week</h2>
+    {% if feedback_weekly %}<canvas id="fbChart"></canvas>
+    {% else %}<div class="empty">No feedback requests sent in this period.</div>{% endif %}
+    {% if feedback.by_channel %}
+    <div class="table-wrap"><table>
+      <tr><th>Channel</th><th>Sent</th><th>Responded</th><th>Rate</th></tr>
+      {% for c in feedback.by_channel %}
+      <tr><td>{{ {'bible_study': 'Bible Study', 'leader': 'Check-in sent by a leader', 'scheduled': '9pm check-in'}.get(c.channel, c.channel) }}</td>
+          <td>{{ c.sent }}</td><td>{{ c.responded }}</td><td>{{ c.response_rate_percent ~ '%' if c.response_rate_percent is not none else '—' }}</td></tr>
+      {% endfor %}
+    </table></div>
+    {% endif %}
+  </div>
+  <div class="panel">
+    <h2>Feedback by theme</h2>
+    {% if feedback.themes %}<canvas id="themeChart"></canvas>
+    {% else %}<div class="empty">No feedback text in this period.</div>{% endif %}
+    <p class="note">{{ feedback.flagged_as_distress_count }} reply(ies) flagged as distress are counted but never shown.</p>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Members' questions awaiting an answer</h2>
+  {% set waiting = feedback.questions_relayed_to_leaders.awaiting_answer_anonymous %}
+  {% if waiting %}
+  <div class="table-wrap"><table>
+    <tr><th>#</th><th>Question (anonymous)</th><th>Days waiting</th></tr>
+    {% for w in waiting %}<tr><td>{{ w.number }}</td><td style="white-space:normal">{{ w.question }}</td><td>{{ w.days_waiting }}</td></tr>{% endfor %}
+  </table></div>
+  <p class="note">To answer, reply ANSWER &lt;number&gt; followed by your answer to the bot on WhatsApp. The member stays anonymous.</p>
+  {% else %}<div class="empty">Every relayed question has been answered.</div>{% endif %}
+</div>
+
+<div class="panel">
+  <h2>Recent feedback (anonymous)</h2>
+  {% if feedback.recent_feedback_anonymous %}
+  <div class="table-wrap"><table>
+    <tr><th>Theme</th><th>Activity</th><th>Date</th><th>Feedback</th></tr>
+    {% for f in feedback.recent_feedback_anonymous %}
+    <tr><td>{{ f.theme }}</td><td>{{ f.activity }}</td><td>{{ f.date }}</td><td style="white-space:normal">{{ f.text }}</td></tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<div class="empty">No feedback in this period.</div>{% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const colours = ['#2f5aa8', '#b4531a', '#3a9d7a', '#c07a2c', '#8a58b0', '#5f6b7a'];
+  const esc = {{ escalations_weekly | tojson }};
+  if (esc.weeks.length) new Chart(document.getElementById('escChart'), {
+    type: 'bar',
+    data: { labels: esc.weeks.map(w => 'Week of ' + w),
+            datasets: Object.entries(esc.series).map(([k, d], i) => ({ label: k, data: d, backgroundColor: colours[i % 6], stack: 's' })) },
+    options: { scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+  });
+  const reasons = {{ reasons | tojson }};
+  if (Object.keys(reasons).length) new Chart(document.getElementById('reasonChart'), {
+    type: 'bar',
+    data: { labels: Object.keys(reasons), datasets: [{ data: Object.values(reasons), backgroundColor: '#2f5aa8' }] },
+    options: { indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true, ticks: { precision: 0 } } } }
+  });
+  const fb = {{ feedback_weekly | tojson }};
+  if (fb.length) new Chart(document.getElementById('fbChart'), {
+    type: 'line',
+    data: { labels: fb.map(w => 'Week of ' + w.week), datasets: [{ label: 'Response rate %', data: fb.map(w => w.rate), borderColor: '#3a9d7a', tension: 0.2 }] },
+    options: { scales: { y: { min: 0, max: 100 } }, plugins: { legend: { display: false } } }
+  });
+  const themes = {{ feedback.themes | tojson }};
+  if (Object.keys(themes).length) new Chart(document.getElementById('themeChart'), {
+    type: 'doughnut',
+    data: { labels: Object.keys(themes), datasets: [{ data: Object.values(themes), backgroundColor: colours }] }
+  });
+</script>
+{% endblock %}

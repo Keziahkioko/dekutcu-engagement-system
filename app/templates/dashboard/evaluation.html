@@ -1,0 +1,64 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Evaluation · DeKUTCU Reports{% endblock %}
+{% block content %}
+<div class="panel">
+  <h2>Objective 3: adaptive re-engagement</h2>
+  <p class="note">When a member misses a session and gives a reason, the bot picks a follow-up strategy.
+    Most members get the strategy the bandit is learning to prefer; a fixed ~15% control group always gets
+    the plain reminder, so the two can be compared. {{ evaluation.note }}</p>
+</div>
+
+<div class="panel">
+  <h2>Strategy chosen each week (policy convergence)</h2>
+  <p class="note">A policy that is learning moves from roughly even shares toward the strategies that work. Adaptive members only.</p>
+  {% if arm_share_weekly.weeks %}<canvas id="armChart"></canvas>
+  {% else %}<div class="empty">No strategies chosen in this period yet.</div>{% endif %}
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Outcomes per strategy</h2>
+    {% if evaluation.adaptive_arm_choices %}
+    <div class="table-wrap"><table>
+      <tr><th>Strategy</th><th>Times chosen</th><th>Outcome known</th><th>Came back next session</th></tr>
+      {% for a in evaluation.adaptive_arm_choices %}
+      <tr><td>{{ a.arm.replace('_', ' ') }}</td><td>{{ a.times_chosen }}</td><td>{{ a.outcomes_known }}</td>
+          <td>{{ a.returned_next_session_percent ~ '%' if a.returned_next_session_percent is not none else '—' }}</td></tr>
+      {% endfor %}
+    </table></div>
+    {% else %}<div class="empty">No strategies chosen yet.</div>{% endif %}
+  </div>
+  <div class="panel">
+    <h2>Recovery within 2 sessions: adaptive vs control</h2>
+    {% if evaluation.recovery_within_2_sessions %}
+    <canvas id="recChart"></canvas>
+    <div class="table-wrap"><table>
+      <tr><th>Group</th><th>Follow-ups</th><th>Measured</th><th>Recovered</th></tr>
+      {% for g in evaluation.recovery_within_2_sessions %}
+      <tr><td>{{ g.group }}</td><td>{{ g.follow_ups }}</td><td>{{ g.measured }}</td>
+          <td>{{ g.recovered_percent ~ '%' if g.recovered_percent is not none else '—' }}</td></tr>
+      {% endfor %}
+    </table></div>
+    {% else %}<div class="empty">No follow-ups measured yet.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const colours = ['#2f5aa8', '#3a9d7a', '#c07a2c', '#8a58b0'];
+  const arms = {{ arm_share_weekly | tojson }};
+  if (arms.weeks.length) new Chart(document.getElementById('armChart'), {
+    type: 'bar',
+    data: { labels: arms.weeks.map(w => 'Week of ' + w),
+            datasets: Object.entries(arms.series).map(([k, d], i) => ({ label: k.replace('_', ' '), data: d, backgroundColor: colours[i % 4], stack: 's' })) },
+    options: { scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+  });
+  const rec = {{ evaluation.recovery_within_2_sessions | tojson }};
+  if (rec.length) new Chart(document.getElementById('recChart'), {
+    type: 'bar',
+    data: { labels: rec.map(g => g.group), datasets: [{ data: rec.map(g => g.recovered_percent), backgroundColor: ['#2f5aa8', '#c07a2c'] }] },
+    options: { plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 100, title: { display: true, text: 'Recovered %' } } } }
+  });
+</script>
+{% endblock %}

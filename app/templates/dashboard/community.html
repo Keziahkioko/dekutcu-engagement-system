@@ -1,0 +1,72 @@
+{% extends "dashboard/base.html" %}
+{% block title %}Companion & members · DeKUTCU Reports{% endblock %}
+{% block content %}
+<div class="cards">
+  <div class="card"><div class="label">Registered members</div><div class="value">{{ membership.registered }}</div>
+    <div class="note">{{ membership.new_in_period }} new in this period</div></div>
+  <div class="card"><div class="label">Placed in a Bible Study group</div><div class="value">{{ membership.placed_in_group }}</div></div>
+  <div class="card"><div class="label">Opted out of check-ins</div><div class="value">{{ membership.opted_out_of_check_ins }}</div></div>
+  <div class="card"><div class="label">Withdrew consent</div><div class="value">{{ membership.withdrew_consent }}</div></div>
+  <div class="card"><div class="label">Leaders</div><div class="value">{{ membership.leaders }}</div></div>
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Questions to the companion, per week</h2>
+    {% if companion_weekly.weeks %}<canvas id="ragChart"></canvas>
+    {% else %}<div class="empty">No questions in this period.</div>{% endif %}
+    <p class="note">{{ companion.note }}</p>
+  </div>
+  <div class="panel">
+    <h2>New registrations per week</h2>
+    {% if registrations_weekly %}<canvas id="regChart"></canvas>
+    {% else %}<div class="empty">No new registrations in this period.</div>{% endif %}
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Questions the materials didn't cover</h2>
+  <p class="note">Anonymous. These are the gaps worth adding material on (see docs/CORPUS.md for the vetting criteria).</p>
+  {% if companion.not_covered_general_questions_anonymous %}
+  <div class="table-wrap"><table>
+    <tr><th>Question</th><th>Times asked</th></tr>
+    {% for c in companion.not_covered_general_questions_anonymous %}
+    <tr><td style="white-space:normal">{{ c.question }}</td><td>{{ c.times_asked }}</td></tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<div class="empty">Every general question in this period was covered.</div>{% endif %}
+</div>
+
+<div class="panel">
+  <h2>Upcoming events</h2>
+  {% if events %}
+  <div class="table-wrap"><table>
+    <tr><th>Event</th><th>Date</th><th>Type</th><th>Yes</th><th>Maybe</th><th>No</th></tr>
+    {% for e in events %}
+    <tr><td>{{ e.title }}</td><td>{{ e.date }}</td><td>{{ e.type }}</td>
+      {% if e.type == 'broadcast' %}<td colspan="3" class="note">announcement only -- no RSVPs</td>
+      {% else %}<td>{{ e.yes }}</td><td>{{ e.maybe }}</td><td>{{ e.no }}</td>{% endif %}</tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<div class="empty">No upcoming events.</div>{% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const colours = { answered: '#3a9d7a', not_covered: '#c07a2c', secondary_issue: '#8a58b0', escalated: '#b4531a', error: '#5f6b7a' };
+  const rag = {{ companion_weekly | tojson }};
+  if (rag.weeks.length) new Chart(document.getElementById('ragChart'), {
+    type: 'bar',
+    data: { labels: rag.weeks.map(w => 'Week of ' + w),
+            datasets: Object.entries(rag.series).map(([k, d]) => ({ label: k.replace('_', ' '), data: d, backgroundColor: colours[k] || '#2f5aa8', stack: 's' })) },
+    options: { scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+  });
+  const reg = {{ registrations_weekly | tojson }};
+  if (reg.length) new Chart(document.getElementById('regChart'), {
+    type: 'bar',
+    data: { labels: reg.map(w => 'Week of ' + w.week), datasets: [{ data: reg.map(w => w.n), backgroundColor: '#2f5aa8' }] },
+    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+  });
+</script>
+{% endblock %}
