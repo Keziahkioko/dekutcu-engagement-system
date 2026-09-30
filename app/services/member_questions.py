@@ -28,6 +28,7 @@ from app.models.member_question import (
     create_question, get_question, record_answer,
     get_pending_question_ask, start_pending_question_ask, delete_pending_question_ask,
 )
+from app.models.withdrawal import REMOVED_TEXT
 from app.services.whatsapp_client import send_whatsapp_message
 
 _ASK_EXPIRY_HOURS = 12
@@ -74,6 +75,8 @@ def handle_answer(leader_whatsapp_id, message_text):
     question = get_question(int(match.group(1)))
     if not question or question["reg_number"] == leader["reg_number"]:
         return None
+    if question["question"] == REMOVED_TEXT:
+        return f"The member who asked question {question['id']} has withdrawn from the system, so nothing was sent."
     answer = match.group(2).strip()
 
     if not record_answer(question["id"], leader["reg_number"], answer, _now()):

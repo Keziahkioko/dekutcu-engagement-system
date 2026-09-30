@@ -28,6 +28,7 @@ case, which app/services/attendance.py already guards separately.
 from datetime import timedelta
 
 from app.database import get_connection
+from app.models.withdrawal import ANON_PREFIX
 
 
 def init_absences_table():
@@ -201,13 +202,18 @@ def set_reward(absence_id, reward):
 
 
 def get_absences_awaiting_reward(cutoff_date):
-    """Every absence with a chosen strategy but no reward yet, whose next weekly occurrence has already passed cutoff_date."""
+    """
+    Every absence with a chosen strategy but no reward yet, whose next weekly occurrence has already passed cutoff_date.
+    Skips anonymised rows (a withdrawn member): they can never have another absence recorded, so "no new
+    absence" would wrongly read as "came back" -- their outcome stays unknown instead.
+    """
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         SELECT * FROM absences
         WHERE chosen_arm IS NOT NULL AND reward IS NULL AND activity_date <= %s
-    """, (cutoff_date,))
+          AND reg_number NOT LIKE %s
+    """, (cutoff_date, ANON_PREFIX + "%"))
     rows = cursor.fetchall()
     cursor.close()
     conn.close()
@@ -226,7 +232,8 @@ def get_absences_awaiting_recovery(cutoff_date):
     cursor.execute("""
         SELECT * FROM absences
         WHERE reward IS NOT NULL AND recovered_within_2 IS NULL AND activity_date <= %s
-    """, (cutoff_date,))
+          AND reg_number NOT LIKE %s
+    """, (cutoff_date, ANON_PREFIX + "%"))
     rows = cursor.fetchall()
     cursor.close()
     conn.close()

@@ -34,6 +34,7 @@ from datetime import date, timedelta
 from app.database import get_connection
 from app.models.member import get_all_leaders, get_member_by_reg_number
 from app.models.absence import weekly_streak
+from app.models.withdrawal import REMOVED_TEXT, count_withdrawals
 from app.services.llm_client import create_chat_completion
 from app.services.message_generator import display_name_for
 from app.services.whatsapp_client import send_whatsapp_message
@@ -198,7 +199,7 @@ def escalation_summary(asker_reg_number, days=30):
     median = round(times[len(times) // 2]) if times else None
     open_cases = []
     for c in cases:
-        if c["claimed_by_reg_number"]:
+        if c["claimed_by_reg_number"] or c["closed_at"]:
             continue
         entry = {"case": c["id"], "urgency": c["urgency"], "hours_waiting": round(float(c["age_minutes"]) / 60, 1),
                  "reminder_sent": c["reminded_at"] is not None, "escalated_to_chair": c["backstop_at"] is not None}
@@ -214,6 +215,7 @@ def escalation_summary(asker_reg_number, days=30):
         "median_minutes_to_claim": median,
         "needed_a_reminder": sum(c["reminded_at"] is not None for c in cases),
         "escalated_to_chair_or_vice_chairs": sum(c["backstop_at"] is not None for c in cases),
+        "closed_because_member_withdrew": sum(c["closed_at"] is not None for c in cases),
         "open_unclaimed_cases": open_cases,
         "note": "Member names appear only on cases you were notified on. Members' own words are never included.",
     }
@@ -249,9 +251,9 @@ def feedback_summary(days=30, theme=None):
     questions = _q(f"""
         SELECT id, question, answered_at IS NOT NULL AS answered,
                EXTRACT(EPOCH FROM ({_UTC_NOW} - created_at)) / 86400 AS days_waiting
-        FROM member_questions WHERE created_at >= {_UTC_NOW} - (%s * INTERVAL '1 day')
+        FROM member_questions WHERE created_at >= {_UTC_NOW} - (%s * INTERVAL '1 day') AND question <> %s
         ORDER BY created_at
-    """, (days,))
+    """, (days, REMOVED_TEXT))
     sent = sum(r["sent"] for r in by_channel)
     responded = sum(r["responded"] for r in by_channel)
     return {
@@ -285,10 +287,10 @@ def companion_questions(days=30):
     """, (days,))
     uncovered = _q(f"""
         SELECT question, COUNT(*) AS times FROM rag_queries
-        WHERE kind = 'general' AND outcome = 'not_covered'
+        WHERE kind = 'general' AND outcome = 'not_covered' AND question <> %s
           AND created_at >= {_UTC_NOW} - (%s * INTERVAL '1 day')
         GROUP BY question ORDER BY times DESC LIMIT 10
-    """, (days,))
+    """, (REMOVED_TEXT, days))
     return {
         "period_days": days,
         "counts": [{"kind": r["kind"], "outcome": r["outcome"], "n": r["n"]} for r in counts],
@@ -308,7 +310,11 @@ def membership_summary(days=30):
                COUNT(*) FILTER (WHERE is_leader) AS leaders
         FROM members
     """, (days,))[0]
-    return {"period_days": days, **{k: r[k] for k in r.keys()}}
+    result = {"period_days": days, **{k: r[k] for k in r.keys()}}
+    # Completed withdrawals leave no member record behind, only an identity-free count (see withdrawal.py);
+    # the members-table count above covers anyone whose withdrawal is still waiting on an acute case.
+    result["withdrew_consent"] += count_withdrawals()
+    return result
 
 
 def event_rsvps():

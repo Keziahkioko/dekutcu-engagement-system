@@ -52,6 +52,11 @@ def init_escalations_table():
     cursor.execute("ALTER TABLE escalation_cases ADD COLUMN IF NOT EXISTS urgency TEXT DEFAULT 'normal' NOT NULL")
     cursor.execute("ALTER TABLE escalation_cases ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMP")
     cursor.execute("ALTER TABLE escalation_cases ADD COLUMN IF NOT EXISTS backstop_at TIMESTAMP")
+    # Consent withdrawal (2026-09-30): a NORMAL open case is closed when the
+    # member withdraws -- withdrawing takes back the "yes" that opened it.
+    # A closed case is never followed up and can't be claimed.
+    cursor.execute("ALTER TABLE escalation_cases ADD COLUMN IF NOT EXISTS closed_at TIMESTAMP")
+    cursor.execute("ALTER TABLE escalation_cases ADD COLUMN IF NOT EXISTS closed_reason TEXT")
     conn.commit()
     cursor.close()
     conn.close()
@@ -93,7 +98,7 @@ def claim_case(case_id, leader_reg_number, claimed_at):
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE escalation_cases SET claimed_by_reg_number = %s, claimed_at = %s
-        WHERE id = %s AND claimed_by_reg_number IS NULL
+        WHERE id = %s AND claimed_by_reg_number IS NULL AND closed_at IS NULL
         RETURNING id
     """, (leader_reg_number, claimed_at, case_id))
     claimed = cursor.fetchone() is not None
@@ -145,7 +150,7 @@ def open_cases_for_leader(leader_reg_number):
     cursor.execute("""
         SELECT DISTINCT c.* FROM escalation_cases c
         JOIN escalations e ON e.case_id = c.id
-        WHERE e.notified_leader_reg_number = %s AND c.claimed_by_reg_number IS NULL
+        WHERE e.notified_leader_reg_number = %s AND c.claimed_by_reg_number IS NULL AND c.closed_at IS NULL
         ORDER BY c.created_at DESC
     """, (leader_reg_number,))
     rows = cursor.fetchall()
@@ -155,10 +160,11 @@ def open_cases_for_leader(leader_reg_number):
 
 
 def get_unclaimed_cases():
-    """Every case nobody has claimed yet, oldest first."""
+    """Every open case nobody has claimed yet (closed cases excluded), oldest first."""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM escalation_cases WHERE claimed_by_reg_number IS NULL ORDER BY created_at")
+    cursor.execute("""SELECT * FROM escalation_cases
+                      WHERE claimed_by_reg_number IS NULL AND closed_at IS NULL ORDER BY created_at""")
     rows = cursor.fetchall()
     cursor.close()
     conn.close()
@@ -174,3 +180,31 @@ def mark_case(case_id, column, at):
     conn.commit()
     cursor.close()
     conn.close()
+
+
+def get_open_cases_for_member(reg_number):
+    """This member's cases that are neither claimed nor closed."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""SELECT * FROM escalation_cases
+                      WHERE reg_number = %s AND claimed_by_reg_number IS NULL AND closed_at IS NULL""", (reg_number,))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
+
+
+def close_case(case_id, reason, at):
+    """Closes an open, unclaimed case -- it's then never followed up or claimable. True if this call closed it."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE escalation_cases SET closed_at = %s, closed_reason = %s
+        WHERE id = %s AND claimed_by_reg_number IS NULL AND closed_at IS NULL
+        RETURNING id
+    """, (at, reason, case_id))
+    closed = cursor.fetchone() is not None
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return closed

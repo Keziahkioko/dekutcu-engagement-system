@@ -354,6 +354,8 @@ def handle_claim(leader_whatsapp_id, message_text):
     case = get_case(case_id)
     if not case or leader["reg_number"] not in notified_leaders(case_id):
         return None
+    if case["closed_at"]:
+        return f"Case {case_id} was closed because the member withdrew from the system -- please don't reach out about it."
 
     member = get_member_by_reg_number(case["reg_number"])
     member_name = member["name"] if member else "the member"

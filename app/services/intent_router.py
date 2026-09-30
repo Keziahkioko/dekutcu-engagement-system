@@ -68,7 +68,6 @@ from app.models.pending_feedback import delete_pending_feedback
 from app.models.conversation_history import (
     get_recent_conversation,
     log_conversation_message,
-    clear_conversation_history,
 )
 from app.database import get_connection
 from app.services.allocation import allocate_members_topup, allocate_members_ilp
@@ -85,6 +84,7 @@ from app.services import org_contacts
 from app.services import exec_roles
 from app.services import reporting
 from app.services import dashboard
+from app.services import withdrawal
 from app.services.message_generator import display_name_for
 from app.services.group_query import answer_group_question
 from app.services.llm_client import create_chat_completion
@@ -360,27 +360,6 @@ def _handle_withdraw_data_consent(member, text):
     set_pending_action(member["whatsapp_id"], "withdraw_data_consent")
     return CONFIRMATION_QUESTIONS["withdraw_data_consent"]
 
-
-def withdraw_all_consent(whatsapp_id):
-    """
-    Sets BOTH consent flags to False -- the full, deliberate
-    withdrawal, distinct from STOP/unsubscribe_followup which only
-    ever touches followup_consent. Also clears group_label: a
-    withdrawn member shouldn't keep "occupying" a slot the allocation
-    engine thinks is taken, so a future run can offer it to someone else.
-    Also purges conversation_history -- withdrawing consent should mean
-    no trace of past exchanges is kept, not just the structured fields.
-    """
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE members SET data_consent = FALSE, followup_consent = FALSE, group_label = NULL WHERE whatsapp_id = %s",
-        (whatsapp_id,)
-    )
-    conn.commit()
-    cursor.close()
-    conn.close()
-    clear_conversation_history(whatsapp_id)
 
 
 # ---------------------------------------------------------------------
@@ -807,12 +786,7 @@ def handle_pending_action_response(whatsapp_id, text):
         set_followup_consent(whatsapp_id, True)
         return "Great, follow-up check-ins are back on."
     elif action == "withdraw_data_consent":
-        withdraw_all_consent(whatsapp_id)
-        return (
-            "Your consent has been withdrawn and you're no longer an "
-            "active tracked member. If you'd like to fully rejoin later, "
-            "just message me again to re-register."
-        )
+        return withdrawal.withdraw(whatsapp_id)
     elif action in ("allocate_groups", "reshuffle_groups"):
         return _start_allocation_job(whatsapp_id, action)
     elif action == "send_checkin":

@@ -47,6 +47,8 @@ from app.models.rag import init_rag_tables
 from app.models.pending_exec_role import init_pending_exec_role_table
 from app.models.attendance_marking import init_attendance_markings_table
 from app.models.member_question import init_member_question_tables
+from app.models.withdrawal import init_consent_withdrawals_table
+from app.services.withdrawal import finish_pending_withdrawals
 from app.services.reporting import send_weekly_digest
 from app.services.feedback_themes import sort_pending_feedback
 from app.services.scheduler import start_scheduler, register_task, register_every_check_task
@@ -107,6 +109,7 @@ def create_app():
     init_attendance_markings_table()
     init_member_question_tables()
     init_dashboard_login_table()
+    init_consent_withdrawals_table()
 
     run_workers = _should_run_background_workers()
     if run_workers:
@@ -149,6 +152,9 @@ def create_app():
     # escalation case nobody has claimed; acute risk can't wait for an
     # hourly slot. See escalation.follow_up_unclaimed_cases.
     register_every_check_task("follow_up_unclaimed_escalations", follow_up_unclaimed_cases)
+    # Completes a consent withdrawal that had to wait for an open acute case to
+    # be claimed (and any made before anonymising existed). See withdrawal.py.
+    register_every_check_task("finish_pending_withdrawals", finish_pending_withdrawals)
 
     if run_workers:
         start_scheduler()
