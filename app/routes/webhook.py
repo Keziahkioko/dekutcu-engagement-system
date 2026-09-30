@@ -56,6 +56,8 @@ from app.services import escalation
 from app.services import feedback
 from app.services import exec_roles
 from app.services import member_questions
+from app.services import study_guides
+from app.models.study_guide import get_pending_guide_creation
 from app.services.whatsapp_client import send_whatsapp_message
 
 webhook_bp = Blueprint("webhook", __name__)
@@ -236,6 +238,12 @@ def route_incoming_message(sender_number, message_text):
             return exec_roles.handle_message(sender_number, message_text)
         if get_pending_event_creation(sender_number) is not None:
             return event_manager.handle_create_event_message(sender_number, message_text)
+        if get_pending_guide_creation(sender_number) is not None:
+            # An exec leader starting a new study guide -- expires after 30
+            # minutes, then the message is routed normally (study_guides.py).
+            reply = study_guides.handle_start_guide_message(sender_number, message_text)
+            if reply is not None:
+                return reply
         if get_pending_rsvp(sender_number) is not None:
             return event_manager.handle_rsvp_message(sender_number, message_text)
         if get_pending_attendance_marking(sender_number) is not None:

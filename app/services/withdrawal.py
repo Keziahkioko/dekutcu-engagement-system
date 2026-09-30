@@ -50,7 +50,7 @@ _PENDING_TABLES = [
     "pending_actions", "pending_area_changes", "pending_attendance_marking", "pending_escalation_consent",
     "pending_event_creation", "pending_exec_role", "pending_feedback", "pending_fellowship_checkin",
     "pending_leader_nominations", "pending_question_ask", "pending_reason_capture",
-    "pending_reassignment_resolutions", "pending_registrations", "pending_rsvps",
+    "pending_reassignment_resolutions", "pending_registrations", "pending_rsvps", "pending_guide_creation",
 ]
 
 
@@ -130,6 +130,14 @@ def anonymise(member):
         ("UPDATE escalation_cases SET claimed_by_reg_number = %(t)s WHERE claimed_by_reg_number = %(r)s", None),
         ("UPDATE escalations SET notified_leader_reg_number = %(t)s WHERE notified_leader_reg_number = %(r)s", None),
         ("UPDATE attendance_markings SET marked_by_reg_number = %(t)s WHERE marked_by_reg_number = %(r)s", None),
+        # Study guides (Stage 14): purchases kept for the sales history, but the phone number charged is theirs.
+        ("UPDATE guide_purchases SET reg_number = %(t)s, phone = NULL WHERE reg_number = %(r)s", None),
+        ("UPDATE guide_purchases SET collected_by_reg_number = %(t)s WHERE collected_by_reg_number = %(r)s", None),
+        ("UPDATE guide_batches SET leader_reg_number = %(t)s WHERE leader_reg_number = %(r)s", None),
+        ("UPDATE guide_batches SET given_by_reg_number = %(t)s WHERE given_by_reg_number = %(r)s", None),
+        ("UPDATE study_guides SET started_by_reg_number = %(t)s WHERE started_by_reg_number = %(r)s", None),
+        ("DELETE FROM discipleship_team WHERE reg_number = %(r)s", None),
+        ("UPDATE discipleship_team SET added_by_reg_number = %(t)s WHERE added_by_reg_number = %(r)s", None),
         ("DELETE FROM dashboard_login_codes WHERE reg_number = %(r)s", None),
         ("DELETE FROM pending_leader_nominations WHERE candidate_reg_number = %(r)s", None),
         ("DELETE FROM pending_reassignment_resolutions WHERE member_reg_number = %(r)s", None),

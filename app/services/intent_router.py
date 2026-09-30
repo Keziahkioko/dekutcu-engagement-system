@@ -85,6 +85,7 @@ from app.services import exec_roles
 from app.services import reporting
 from app.services import dashboard
 from app.services import withdrawal
+from app.services import study_guides
 from app.services.message_generator import display_name_for
 from app.services.group_query import answer_group_question
 from app.services.llm_client import create_chat_completion
@@ -104,6 +105,7 @@ INTENT_DEFINITIONS = {
     "checkin_response": "Explaining or giving a reason for missing a session or event.",
     "feedback_response": "Giving feedback, a rating, or comments about a past event.",
     "purchase_study_guide": "Wanting to buy or pay for a Bible Study guide.",
+    "start_study_guide": "An exec leader wanting to START or set up a NEW semester's study guide for sale (its title and price) -- not someone wanting to buy one.",
     "update_details": "Wanting to change their own registered details (e.g. area, year of study, name).",
     "unsubscribe_followup": "Wanting to stop receiving follow-up/accountability check-ins specifically.",
     "resume_followup": "Wanting to start receiving follow-up/accountability check-ins again, having previously stopped them.",
@@ -133,6 +135,7 @@ LEADER_ONLY_INTENTS = {
     "leadership_query", "send_announcement", "allocate_groups", "reshuffle_groups",
     "nominate_group_leader", "view_group_leaders", "resolve_pending_leader", "remove_group_leader",
     "resolve_reassignments", "create_event", "send_checkin", "set_exec_roles", "reports_website",
+    "start_study_guide",
 }
 
 # Guards against two allocation runs (each ~10-15 seconds) overlapping
@@ -884,6 +887,7 @@ _STUB_HANDLERS = {
     "checkin_response": _handle_stub("Check-in handling"),
     "feedback_response": _handle_feedback_response,
     "purchase_study_guide": _handle_stub("Study guide payments"),
+    "start_study_guide": lambda member, text: study_guides.begin_start_guide(member),
     "update_details": _handle_update_details,
     "unsubscribe_followup": _handle_unsubscribe_followup,
     "resume_followup": _handle_resume_followup,
