@@ -33,9 +33,13 @@
     th { color: var(--muted); font-weight: 600; font-size: 13px; }
     .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
     canvas { max-height: 280px; }
+    .demo-banner { background: #b4531a; color: #fff; text-align: center; font-weight: 600; font-size: 14px; padding: 8px 16px; }
   </style>
 </head>
 <body>
+  {% if demo_mode %}
+  <div class="demo-banner">DEMO DATA &mdash; synthetic history for demonstration only, not real members or real results</div>
+  {% endif %}
   <header>
     <h1>DeKUTCU Reports</h1>
     {% if viewer %}

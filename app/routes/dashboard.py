@@ -16,6 +16,7 @@ Exec leaders see the org-wide pages; group leaders see only their own
 group. All data comes from the privacy-scoped reporting lookups.
 """
 
+import os
 from datetime import datetime, timezone
 from functools import wraps
 
@@ -130,10 +131,16 @@ def my_group(member):
 
 @dashboard_bp.context_processor
 def _navigation():
-    """The exec pages beyond Overview, shown in the header for exec leaders."""
+    """
+    The exec pages beyond Overview, shown in the header for exec leaders;
+    and demo_mode -- set only by demo/run_demo.py (never on Render), which
+    puts a "DEMO DATA" banner on every page so synthetic data can't be
+    mistaken for real results.
+    """
     return {"extra_pages": [("Care & feedback", "dashboard.care"),
                             ("Companion & members", "dashboard.community"),
-                            ("Evaluation", "dashboard.evaluation")]}
+                            ("Evaluation", "dashboard.evaluation")],
+            "demo_mode": os.getenv("DEMO_MODE") == "true"}
 
 
 @dashboard_bp.route("/care")

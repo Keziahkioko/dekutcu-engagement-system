@@ -134,13 +134,23 @@ def count_consecutive_misses(reg_number, activity_type, up_to_date):
     dates = [row["activity_date"] for row in cursor.fetchall()]
     cursor.close()
     conn.close()
+    return weekly_streak(dates)
 
-    if not dates:
+
+def weekly_streak(dates_newest_first):
+    """
+    The streak rule itself, with no database access -- shared by the
+    bandit (via count_consecutive_misses, one absence at a time) and the
+    lapsing-members report (which fetches every absence in one query and
+    counts streaks here), so both always apply exactly the same rule.
+    Counts back from the newest date while each earlier date is exactly
+    one week before the last; any gap ends the streak.
+    """
+    if not dates_newest_first:
         return 0
-
     count = 1
-    expected = dates[0] - timedelta(days=7)
-    for d in dates[1:]:
+    expected = dates_newest_first[0] - timedelta(days=7)
+    for d in dates_newest_first[1:]:
         if d == expected:
             count += 1
             expected -= timedelta(days=7)

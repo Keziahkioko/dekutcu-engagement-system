@@ -33,7 +33,7 @@ from datetime import date, timedelta
 
 from app.database import get_connection
 from app.models.member import get_all_leaders, get_member_by_reg_number
-from app.models.absence import count_consecutive_misses
+from app.models.absence import weekly_streak
 from app.services.llm_client import create_chat_completion
 from app.services.message_generator import display_name_for
 from app.services.whatsapp_client import send_whatsapp_message
@@ -122,28 +122,54 @@ def attendance_summary(days=30, group_label=None):
 
 
 def lapsing_members(group_label=None):
-    """Members on a CURRENT streak of missed sessions -- names (follow-up needs them) and the reason CATEGORY only."""
-    where, params = "a.activity_date >= CURRENT_DATE - %s", [_LAPSING_LOOKBACK_DAYS]
+    """
+    Members on a CURRENT streak of missed sessions -- names (follow-up needs them) and the reason CATEGORY only.
+
+    Three queries in total, whatever the amount of history (it used to be one query per member per
+    activity -- 291 seconds on a simulated semester). Streaks use the same rule as the bandit
+    (absence.weekly_streak). A streak only counts if the member hasn't come back since:
+      - Bible Study: their group was marked on a later date and they weren't on that date's absent list;
+      - fellowships: they later replied that they attended.
+    Silence is NOT coming back -- the system never guesses attendance.
+    """
+    where, params = "", [_LAPSING_LOOKBACK_DAYS]
     if group_label:
-        where += " AND m.group_label = %s"
+        where = "AND m.group_label = %s"
         params.append(group_label)
-    latest = _q(f"""
-        SELECT DISTINCT ON (a.reg_number, a.activity_type)
-               a.reg_number, a.activity_type, a.activity_date, a.reason_category, m.name, m.group_label
+    rows = _q(f"""
+        SELECT a.reg_number, a.activity_type, a.activity_date, a.reason_category, m.name, m.group_label
         FROM absences a JOIN members m ON m.reg_number = a.reg_number
-        WHERE {where}
+        WHERE (a.reg_number, a.activity_type) IN (
+                  SELECT reg_number, activity_type FROM absences WHERE activity_date >= CURRENT_DATE - %s)
+              {where}
         ORDER BY a.reg_number, a.activity_type, a.activity_date DESC
     """, params)
+    last_marked = {r["group_label"]: r["last"] for r in _q(
+        "SELECT group_label, MAX(activity_date) AS last FROM attendance_markings GROUP BY group_label")}
+    last_present = {(r["reg_number"], r["activity_type"]): r["last"] for r in _q(
+        "SELECT reg_number, activity_type, MAX(checkin_date) AS last FROM fellowship_checkins GROUP BY 1, 2")}
+
+    by_pair = {}
+    for r in rows:
+        by_pair.setdefault((r["reg_number"], r["activity_type"]), []).append(r)
+
     lapsing = []
-    for row in latest:
-        streak = count_consecutive_misses(row["reg_number"], row["activity_type"], row["activity_date"])
+    for (reg_number, activity_type), absences in by_pair.items():
+        latest = absences[0]
+        if activity_type == "bible_study":
+            came_back = (last_marked.get(latest["group_label"]) or date.min) > latest["activity_date"]
+        else:
+            came_back = (last_present.get((reg_number, activity_type)) or date.min) > latest["activity_date"]
+        if came_back:
+            continue
+        streak = weekly_streak([a["activity_date"] for a in absences])
         if streak >= _LAPSING_STREAK:
             lapsing.append({
-                "name": row["name"],
-                "group": row["group_label"],
-                "activity": display_name_for(row["activity_type"]),
+                "name": latest["name"],
+                "group": latest["group_label"],
+                "activity": display_name_for(activity_type),
                 "missed_in_a_row": streak,
-                "latest_reason_category": _label(row["reason_category"]) if row["reason_category"] else "not given",
+                "latest_reason_category": _label(latest["reason_category"]) if latest["reason_category"] else "not given",
             })
     return {"members": sorted(lapsing, key=lambda r: -r["missed_in_a_row"])}
 

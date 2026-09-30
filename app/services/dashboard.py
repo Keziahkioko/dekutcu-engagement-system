@@ -80,17 +80,26 @@ def bible_study_weekly(days, group_label=None):
 
 
 def fellowship_weekly(days):
-    """Members who said they were present, per week per fellowship."""
+    """
+    Members who said they were present, per week per fellowship. A week
+    where that fellowship's check-in was never sent (the day hasn't come
+    yet this week, or nothing went out) is None -- a GAP in the chart,
+    not a 0 -- so the current week doesn't look like a collapse. 0 means
+    a check-in went out and nobody said they attended.
+    """
     rows = _q("""
-        SELECT date_trunc('week', checkin_date)::date AS week, activity_type, COUNT(*) AS present
-        FROM fellowship_checkins WHERE checkin_date >= CURRENT_DATE - %s
+        SELECT date_trunc('week', b.checkin_date)::date AS week, b.activity_type,
+               COUNT(c.id) AS present
+        FROM checkin_broadcasts b
+        LEFT JOIN fellowship_checkins c ON c.activity_type = b.activity_type AND c.checkin_date = b.checkin_date
+        WHERE b.checkin_date >= CURRENT_DATE - %s
         GROUP BY 1, 2 ORDER BY 1
     """, (days,))
     weeks = sorted({str(r["week"]) for r in rows})
     series = {}
     for r in rows:
         series.setdefault(display_name_for(r["activity_type"]), {})[str(r["week"])] = r["present"]
-    return {"weeks": weeks, "series": {name: [by_week.get(w, 0) for w in weeks] for name, by_week in series.items()}}
+    return {"weeks": weeks, "series": {name: [by_week.get(w) for w in weeks] for name, by_week in series.items()}}
 
 
 def _weekly(rows, key_field, value_field="n"):
