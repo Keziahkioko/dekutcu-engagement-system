@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 
 from app.routes.webhook import webhook_bp, start_message_worker
 from app.routes.dashboard import dashboard_bp
+from app.routes.mpesa import mpesa_bp
 from app.services.dashboard import SESSION_LIFETIME
 from app.models.dashboard_login import init_dashboard_login_table
 from app.models.member import init_members_table
@@ -50,6 +51,7 @@ from app.models.member_question import init_member_question_tables
 from app.models.withdrawal import init_consent_withdrawals_table
 from app.models.study_guide import init_study_guide_tables
 from app.services.withdrawal import finish_pending_withdrawals
+from app.services.guide_payments import check_unsettled_purchases
 from app.services.reporting import send_weekly_digest
 from app.services.feedback_themes import sort_pending_feedback
 from app.services.scheduler import start_scheduler, register_task, register_every_check_task
@@ -67,6 +69,7 @@ def create_app():
     # Register route blueprints
     app.register_blueprint(webhook_bp)
     app.register_blueprint(dashboard_bp)
+    app.register_blueprint(mpesa_bp)
 
     # The reports website's login session (Stage 13 -- see
     # app/routes/dashboard.py). Signed with DASHBOARD_SECRET_KEY; with no
@@ -157,6 +160,9 @@ def create_app():
     # Completes a consent withdrawal that had to wait for an open acute case to
     # be claimed (and any made before anonymising existed). See withdrawal.py.
     register_every_check_task("finish_pending_withdrawals", finish_pending_withdrawals)
+    # M-Pesa safety net: asks Safaricom directly about any study-guide payment still
+    # pending after 2 minutes, in case its callback never arrived. See guide_payments.py.
+    register_every_check_task("check_unsettled_guide_payments", check_unsettled_purchases)
 
     if run_workers:
         start_scheduler()

@@ -27,6 +27,8 @@ Keziah 2026-09-30 -- see PROJECT_LOG.md).
                     study guide".
 """
 
+import psycopg2
+
 from app.database import get_connection
 
 DEFAULT_PRICE_KES = 70
@@ -68,6 +70,14 @@ def init_study_guide_tables():
     """)
     cursor.execute("""CREATE UNIQUE INDEX IF NOT EXISTS one_paid_purchase_per_guide
                       ON guide_purchases (guide_id, reg_number) WHERE status = 'paid'""")
+    # Step 2 (2026-09-30): what the CALLBACK claimed, kept apart from the confirmed result -- a callback
+    # isn't trusted until the status query agrees (see guide_payments.py). And 'duplicate': money really
+    # taken a second time for a guide the member already paid for -- recorded so it's visible for a refund.
+    cursor.execute("ALTER TABLE guide_purchases ADD COLUMN IF NOT EXISTS reported_result_code INTEGER")
+    cursor.execute("ALTER TABLE guide_purchases ADD COLUMN IF NOT EXISTS reported_receipt TEXT")
+    cursor.execute("ALTER TABLE guide_purchases DROP CONSTRAINT IF EXISTS guide_purchases_status_check")
+    cursor.execute("""ALTER TABLE guide_purchases ADD CONSTRAINT guide_purchases_status_check
+                      CHECK (status IN ('pending', 'paid', 'failed', 'cancelled', 'duplicate'))""")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS guide_batches (
             id SERIAL PRIMARY KEY,
@@ -166,3 +176,86 @@ def update_pending_guide_creation(whatsapp_id, step, title=None, price_kes=None)
 
 def delete_pending_guide_creation(whatsapp_id):
     _one("DELETE FROM pending_guide_creation WHERE whatsapp_id = %s", (whatsapp_id,))
+
+
+# --- purchases (Stage 14 step 2) ---
+
+def create_pending_purchase(guide_id, reg_number, amount_kes, phone, at):
+    return _one("""INSERT INTO guide_purchases (guide_id, reg_number, amount_kes, phone, status, requested_at)
+                   VALUES (%s, %s, %s, %s, 'pending', %s) RETURNING *""", (guide_id, reg_number, amount_kes, phone, at))
+
+
+def attach_checkout(purchase_id, checkout_request_id, merchant_request_id):
+    _one("UPDATE guide_purchases SET checkout_request_id = %s, merchant_request_id = %s WHERE id = %s",
+         (checkout_request_id, merchant_request_id, purchase_id))
+
+
+def get_purchase(purchase_id):
+    return _one("SELECT * FROM guide_purchases WHERE id = %s", (purchase_id,))
+
+
+def get_purchase_by_checkout(checkout_request_id):
+    return _one("SELECT * FROM guide_purchases WHERE checkout_request_id = %s", (checkout_request_id,))
+
+
+def record_reported(purchase_id, result_code, receipt):
+    """What the callback CLAIMED -- stored, not trusted (the status query decides)."""
+    _one("""UPDATE guide_purchases SET reported_result_code = %s, reported_receipt = COALESCE(%s, reported_receipt)
+            WHERE id = %s AND status = 'pending'""", (result_code, receipt, purchase_id))
+
+
+def settle_purchase(purchase_id, status, result_code, result_desc, receipt, at):
+    """
+    Pending -> final, ONCE: every update below only applies while the purchase is still pending,
+    so a repeated callback (or the callback and the safety-net check both arriving) changes nothing.
+    Returns the settled row, or None if it was already settled.
+
+    Tried in order, each in its own transaction:
+      1. the result as given;
+      2. if the database refuses a 'paid' because the member ALREADY has a paid purchase of this
+         guide -- money really taken twice -- record it as 'duplicate' so a refund can be arranged,
+         rather than losing it;
+      3. if even that is refused, the receipt code is already on ANOTHER purchase -- impossible for a
+         genuine payment -- so it's kept as 'failed' with the reason, never as paid.
+    """
+    attempts = [
+        ("""UPDATE guide_purchases SET status = %s, result_code = %s, result_desc = %s, mpesa_receipt = %s,
+                   paid_at = CASE WHEN %s = 'paid' THEN %s ELSE NULL END
+            WHERE id = %s AND status = 'pending' RETURNING *""",
+         (status, result_code, result_desc, receipt, status, at, purchase_id)),
+        ("""UPDATE guide_purchases SET status = 'duplicate', result_code = %s,
+                   result_desc = 'paid twice for the same guide -- refund needed', mpesa_receipt = %s, paid_at = %s
+            WHERE id = %s AND status = 'pending' RETURNING *""",
+         (result_code, receipt, at, purchase_id)),
+        ("""UPDATE guide_purchases SET status = 'failed', result_code = %s,
+                   result_desc = 'receipt code already recorded on another purchase'
+            WHERE id = %s AND status = 'pending' RETURNING *""",
+         (result_code, purchase_id)),
+    ]
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        for sql, params in attempts:
+            try:
+                cursor.execute(sql, params)
+                row = cursor.fetchone()
+                conn.commit()
+                return row
+            except psycopg2.IntegrityError:
+                conn.rollback()
+        return None
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_unsettled_purchases(requested_before):
+    """Pending purchases older than the cutoff -- for the safety-net status check."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM guide_purchases WHERE status = 'pending' AND requested_at < %s ORDER BY requested_at",
+                   (requested_before,))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
