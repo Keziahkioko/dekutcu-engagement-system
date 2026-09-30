@@ -25,6 +25,8 @@ Keziah 2026-09-30 -- see PROJECT_LOG.md).
                     has added -- they, with the Director, record batches.
   pending_guide_creation  An exec leader part-way through "start a new
                     study guide".
+  pending_guide_purchase  A member who's been asked which number to send the
+                    M-Pesa prompt to (step 3).
 """
 
 import psycopg2
@@ -93,6 +95,13 @@ def init_study_guide_tables():
             reg_number TEXT PRIMARY KEY,
             added_by_reg_number TEXT,
             added_at TIMESTAMP NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pending_guide_purchase (
+            whatsapp_id TEXT PRIMARY KEY,
+            guide_id INTEGER NOT NULL,
+            created_at TIMESTAMP NOT NULL
         )
     """)
     cursor.execute("""
@@ -259,3 +268,40 @@ def get_unsettled_purchases(requested_before):
     cursor.close()
     conn.close()
     return rows
+
+
+# --- buying (Stage 14 step 3) ---
+
+def get_paid_purchase(guide_id, reg_number):
+    return _one("SELECT * FROM guide_purchases WHERE guide_id = %s AND reg_number = %s AND status = 'paid'",
+                (guide_id, reg_number))
+
+
+def get_recent_pending_purchase(guide_id, reg_number, since):
+    return _one("""SELECT * FROM guide_purchases WHERE guide_id = %s AND reg_number = %s AND status = 'pending'
+                   AND requested_at >= %s ORDER BY requested_at DESC LIMIT 1""", (guide_id, reg_number, since))
+
+
+def get_guide(guide_id):
+    return _one("SELECT * FROM study_guides WHERE id = %s", (guide_id,))
+
+
+def get_pending_guide_purchase(whatsapp_id):
+    return _one("SELECT * FROM pending_guide_purchase WHERE whatsapp_id = %s", (whatsapp_id,))
+
+
+def start_pending_guide_purchase(whatsapp_id, guide_id, at):
+    _one("""INSERT INTO pending_guide_purchase (whatsapp_id, guide_id, created_at) VALUES (%s, %s, %s)
+            ON CONFLICT (whatsapp_id) DO UPDATE SET guide_id = EXCLUDED.guide_id, created_at = EXCLUDED.created_at""",
+         (whatsapp_id, guide_id, at))
+
+
+def delete_pending_guide_purchase(whatsapp_id):
+    _one("DELETE FROM pending_guide_purchase WHERE whatsapp_id = %s", (whatsapp_id,))
+
+
+def get_group_leader(group_label):
+    """The member currently leading this Bible Study group, or None."""
+    if not group_label:
+        return None
+    return _one("SELECT * FROM members WHERE leads_group_label = %s LIMIT 1", (group_label,))

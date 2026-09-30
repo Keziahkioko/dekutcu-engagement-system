@@ -106,9 +106,15 @@ def _confirm(purchase, callback_receipt=None):
 
 def _on_settled(purchase):
     """
-    Called exactly once per purchase, when its result is final. Step 3 fills this in (the member's
-    receipt or an honest failure message; step 4 the collector's notice).
+    Called exactly once per purchase, when its result is final: the member's receipt, or an honest
+    failure message (step 4 adds the collector's notice). Imported here, not at the top, because
+    study_guides.py itself uses this module to start payments.
     """
+    from app.services import study_guides
+    try:
+        study_guides.notify_purchase_result(purchase)
+    except Exception as e:
+        print(f"Couldn't message the member about purchase {purchase['id']}: {e}")
 
 
 def check_unsettled_purchases():

@@ -57,7 +57,7 @@ from app.services import feedback
 from app.services import exec_roles
 from app.services import member_questions
 from app.services import study_guides
-from app.models.study_guide import get_pending_guide_creation
+from app.models.study_guide import get_pending_guide_creation, get_pending_guide_purchase
 from app.services.whatsapp_client import send_whatsapp_message
 
 webhook_bp = Blueprint("webhook", __name__)
@@ -242,6 +242,12 @@ def route_incoming_message(sender_number, message_text):
             # An exec leader starting a new study guide -- expires after 30
             # minutes, then the message is routed normally (study_guides.py).
             reply = study_guides.handle_start_guide_message(sender_number, message_text)
+            if reply is not None:
+                return reply
+        if get_pending_guide_purchase(sender_number) is not None:
+            # "Which number should I send the M-Pesa prompt to?" -- anything that isn't
+            # an answer drops the question and is routed normally (study_guides.py).
+            reply = study_guides.handle_purchase_reply(sender_number, message_text)
             if reply is not None:
                 return reply
         if get_pending_rsvp(sender_number) is not None:
