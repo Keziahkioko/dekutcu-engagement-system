@@ -22,6 +22,9 @@ def init_pending_attendance_marking_table():
             created_at TIMESTAMP
         )
     """)
+    # Whether the leader has had the one gentle "you haven't marked it yet"
+    # reminder (added 2026-09-30 -- see attendance.take_reminder).
+    cursor.execute("ALTER TABLE pending_attendance_marking ADD COLUMN IF NOT EXISTS reminded BOOLEAN DEFAULT FALSE NOT NULL")
     conn.commit()
     cursor.close()
     conn.close()
@@ -47,7 +50,8 @@ def start_pending_attendance_marking(whatsapp_id, group_label, activity_date, cr
         INSERT INTO pending_attendance_marking (whatsapp_id, group_label, activity_date, created_at)
         VALUES (%s, %s, %s, %s)
         ON CONFLICT (whatsapp_id) DO UPDATE
-        SET group_label = EXCLUDED.group_label, activity_date = EXCLUDED.activity_date, created_at = EXCLUDED.created_at
+        SET group_label = EXCLUDED.group_label, activity_date = EXCLUDED.activity_date, created_at = EXCLUDED.created_at,
+            reminded = FALSE
     """, (whatsapp_id, group_label, activity_date, created_at))
     conn.commit()
     cursor.close()
@@ -64,3 +68,19 @@ def delete_pending_attendance_marking(whatsapp_id):
     conn.commit()
     cursor.close()
     conn.close()
+
+
+def mark_reminded(whatsapp_id):
+    """Atomic: returns the pending row the FIRST time only (then it's marked), None after -- so the reminder shows once."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE pending_attendance_marking SET reminded = TRUE
+        WHERE whatsapp_id = %s AND NOT reminded
+        RETURNING group_label, activity_date
+    """, (whatsapp_id,))
+    row = cursor.fetchone()
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return row

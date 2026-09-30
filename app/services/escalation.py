@@ -52,6 +52,7 @@ from app.models.pending_escalation_consent import (
 )
 from app.services.whatsapp_client import send_whatsapp_message
 from app.services.llm_client import create_chat_completion
+from app.services import org_contacts
 
 _SEVERITY_SYSTEM_PROMPT = (
     "You assess the severity of a message showing a member is struggling. "
@@ -201,7 +202,27 @@ def escalate_now(member, trigger_type, context_text, urgency_label="may need som
     _case_id, targets = _notify_leaders(member, trigger_type, context_text, urgency_label)
     if targets:
         return _told_member(targets)
+    contact = _direct_contact()
+    if contact:
+        return f"I couldn't reach a leader through me right now, sorry. You can contact DeKUTCU directly:\n{contact}"
     return "I wasn't able to find a leader to notify right now, but please don't hesitate to reach out to someone directly."
+
+
+def _direct_contact():
+    """
+    DeKUTCU's official contact lines (org_contacts, the same settings as the
+    contact-details reply), for when NO leader could be notified -- so the
+    member is never left with just "reach out to someone" and no way to do
+    it (found in the 2026-09-30 live test). Keziah's choice: the DeKUTCU
+    number. Empty string if none is configured.
+    """
+    contacts = org_contacts.get_official_contacts()
+    lines = []
+    if contacts["phone"]:
+        lines.append(f"Phone ({contacts['phone_label']}): {contacts['phone']}")
+    if contacts["email"]:
+        lines.append(f"Email: {contacts['email']}")
+    return "\n".join(lines)
 
 
 def escalate_acute(member, trigger_type, context_text):
@@ -213,6 +234,13 @@ def escalate_acute(member, trigger_type, context_text):
             "What you're describing sounds really serious. Because of that, I've "
             f"already let {who} know so they can reach out and support you "
             "as soon as possible."
+        )
+    contact = _direct_contact()
+    if contact:
+        return (
+            "What you're describing sounds really serious, and I want to make sure you get real "
+            "support right away. I couldn't reach a leader through me just now -- please contact "
+            f"DeKUTCU directly as soon as you can:\n{contact}"
         )
     return (
         "What you're describing sounds really serious, and I want to make sure you "

@@ -239,40 +239,51 @@ def route_incoming_message(sender_number, message_text):
         if get_pending_rsvp(sender_number) is not None:
             return event_manager.handle_rsvp_message(sender_number, message_text)
         if get_pending_attendance_marking(sender_number) is not None:
-            return attendance.handle_attendance_marking_message(sender_number, message_text)
-        if get_pending_fellowship_checkin(sender_number) is not None:
-            return fellowship_checkin.handle_checkin_message(sender_number, message_text)
-        if get_pending_reason_capture(sender_number) is not None:
-            # Can hand the message back (expired, or not actually a reason) --
-            # then it's routed normally, like feedback.
-            reply = reason_capture.handle_reason_capture_message(sender_number, message_text)
+            # A leader's "who was absent?" question stays open until answered;
+            # a message that isn't an answer is routed normally, with ONE gentle
+            # reminder the first time (fixed 2026-09-30 -- it used to trap them).
+            reply = attendance.handle_attendance_marking_message(sender_number, message_text)
             if reply is not None:
                 return reply
-        if get_pending_escalation_consent(sender_number) is not None:
-            # A soft leader OFFER (Stage 12) returns None for anything but
-            # YES/NO -- the offer is dropped and the message routed normally.
-            reply = escalation.handle_consent_reply(sender_number, message_text)
-            if reply is not None:
-                return reply
-        if get_pending_feedback(sender_number) is not None:
-            # Unlike every other pending flow, this one can decline the
-            # message (expired, or not actually feedback -- see
-            # feedback.py) and let it fall through to normal routing.
-            reply = feedback.handle_feedback_message(sender_number, message_text)
-            if reply is not None:
-                return reply
-        if get_pending_question_ask(sender_number) is not None:
-            # "Reply ASK and I'll pass it to a leader" -- anything else drops
-            # the offer and the message is routed normally.
-            reply = member_questions.handle_ask_reply(sender_number, message_text)
-            if reply is not None:
-                return reply
-        return handle_intent_message(sender_number, message_text)
+            return _route_remaining(sender_number, message_text) + attendance.take_reminder(sender_number)
+        return _route_remaining(sender_number, message_text)
 
     if get_pending_registration(sender_number) is not None:
         return handle_message(sender_number, message_text)
 
     return start_registration(sender_number)
+
+
+def _route_remaining(sender_number, message_text):
+    """The rest of a registered member's routing, after the attendance-marking step."""
+    if get_pending_fellowship_checkin(sender_number) is not None:
+        return fellowship_checkin.handle_checkin_message(sender_number, message_text)
+    if get_pending_reason_capture(sender_number) is not None:
+        # Can hand the message back (expired, or not actually a reason) --
+        # then it's routed normally, like feedback.
+        reply = reason_capture.handle_reason_capture_message(sender_number, message_text)
+        if reply is not None:
+            return reply
+    if get_pending_escalation_consent(sender_number) is not None:
+        # A soft leader OFFER (Stage 12) returns None for anything but
+        # YES/NO -- the offer is dropped and the message routed normally.
+        reply = escalation.handle_consent_reply(sender_number, message_text)
+        if reply is not None:
+            return reply
+    if get_pending_feedback(sender_number) is not None:
+        # Unlike every other pending flow, this one can decline the
+        # message (expired, or not actually feedback -- see
+        # feedback.py) and let it fall through to normal routing.
+        reply = feedback.handle_feedback_message(sender_number, message_text)
+        if reply is not None:
+            return reply
+    if get_pending_question_ask(sender_number) is not None:
+        # "Reply ASK and I'll pass it to a leader" -- anything else drops
+        # the offer and the message is routed normally.
+        reply = member_questions.handle_ask_reply(sender_number, message_text)
+        if reply is not None:
+            return reply
+    return handle_intent_message(sender_number, message_text)
 
 
 def _handle_global_stop(sender_number):
