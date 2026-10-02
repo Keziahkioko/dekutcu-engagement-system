@@ -212,6 +212,11 @@ def _is_reason(text):
         return True
 
 
+def is_reason(text):
+    """Public: does this read as a reason for missing something? (Also used by the fellowship check-in reply.)"""
+    return _is_reason(text)
+
+
 def handle_reason_capture_message(whatsapp_id, message_text):
     """
     Returns the reply -- or None if this message isn't actually a reason

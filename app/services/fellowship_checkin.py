@@ -47,6 +47,7 @@ Live replies are handled immediately, never batched:
     would be redundant.
 """
 
+import re
 from datetime import datetime, timezone, date, timedelta
 
 from app.models.member import get_data_consenting_members, get_member_by_whatsapp_id
@@ -62,6 +63,7 @@ from app.models.checkin_broadcast import claim_checkin_broadcast, get_checkin_br
 from app.services.whatsapp_client import send_whatsapp_message
 from app.services.message_generator import display_name_for
 from app.services import reason_capture
+from app.services import conversation
 from app.services import feedback
 
 # weekday: Python's date.weekday() convention (Monday=0 ... Sunday=6).
@@ -172,16 +174,34 @@ def send_leader_checkin():
     return activity_type, send_fellowship_checkin(weekday, triggered_by="leader")
 
 
+# Ways people say "I was there" (QA 2026-10-01: only yes/yeah/yep/yup counted, so "Yes I was",
+# "I was there" or "nilikuja" were recorded as ABSENCES -- with the reply treated as the reason).
+_ATTENDED = re.compile(
+    r"^(yes|yeah|yea|ya|yep|yup|ndio|ndiyo|present|attended|i attended|i came|i went|i did|i was there|"
+    r"i was present|i was at|was there|we were there|nilikuja|nilikuwa|nilifika|nilienda|niliattend)\b")
+
+
 def handle_checkin_message(whatsapp_id, message_text):
+    """
+    The reply to "Were you at X today?". Returns the reply -- or None when the message isn't an answer
+    (a question, or something unrelated): then the question stays open and the message is handled
+    normally; the noon sweep still deals with it if no answer ever comes.
+    """
     pending = get_pending_fellowship_checkin(whatsapp_id)
     if pending is None:
-        return "Something went wrong on my end -- please message me again."
+        return None
 
     activity_type = pending["activity_type"]
     checkin_date = pending["checkin_date"]
     display_name = display_name_for(activity_type)
     text = message_text.strip()
-    lowered = text.lower().rstrip(".")
+    normalised = conversation.normalise(text)
+    lowered = "yes" if _ATTENDED.match(normalised) else normalised
+
+    if lowered not in _YES_VARIANTS and lowered not in _BARE_NO_VARIANTS and conversation.yes_no(text) != "no":
+        # Neither a yes nor a no: an absence reason ("I had class") -- or not an answer at all.
+        if "?" in text or not reason_capture.is_reason(text):
+            return None
 
     delete_pending_fellowship_checkin(whatsapp_id)
     member = get_member_by_whatsapp_id(whatsapp_id)

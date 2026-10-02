@@ -4,3 +4,4 @@ __pycache__/
 .env
 engagement_system.db
 corpus/
+tests/.qa_shard_*.log

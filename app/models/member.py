@@ -201,7 +201,10 @@ def get_member_by_reg_number(reg_number):
     """
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM members WHERE reg_number = %s", (reg_number,))
+    # Compared without spaces or case (QA 2026-10-01): "c026 -01-0735/2023" is the same student as
+    # "C026-01-0735/2023" -- typed variants used to create duplicate accounts.
+    cursor.execute("SELECT * FROM members WHERE UPPER(REPLACE(reg_number, ' ', '')) = UPPER(REPLACE(%s, ' ', ''))",
+                   (reg_number,))
     row = cursor.fetchone()
     cursor.close()
     conn.close()

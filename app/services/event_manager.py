@@ -18,7 +18,9 @@ else in this project (leader_assignment.py, area_change.py):
 and leader nomination.
 """
 
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 from app.models.event import create_event, get_event_by_id, get_upcoming_events
 from app.models.event_rsvp import set_rsvp
@@ -36,6 +38,7 @@ from app.models.pending_rsvp import (
 )
 from app.models.member import get_data_consenting_members
 from app.services.whatsapp_client import send_whatsapp_message
+from app.services import conversation
 
 
 def _now():
@@ -111,13 +114,50 @@ def _handle_title(whatsapp_id, text):
     return "What date? (format: YYYY-MM-DD, e.g. 2026-10-05)"
 
 
+_NAIROBI = ZoneInfo("Africa/Nairobi")
+_DATE_FORMATS = ["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d %b %Y", "%d %B %Y", "%b %d %Y", "%B %d %Y"]
+_DATE_FORMATS_NO_YEAR = ["%d %b", "%d %B", "%b %d", "%B %d", "%d/%m"]
+
+
+def parse_event_date(text, today=None):
+    """
+    A date in the ways leaders actually write it -- 'today', 'tomorrow', '2026-10-05', '5/10/2026',
+    '5 Oct', 'October 5' (day/month order, as in Kenya). Without a year: the next such date.
+    Returns a date, or None. Fixed 2026-10-01 (QA): only YYYY-MM-DD was accepted, and a past
+    date was never refused.
+    """
+    today = today or datetime.now(_NAIROBI).date()
+    cleaned = re.sub(r"(\d)(st|nd|rd|th)\b", r"\1", text.strip().lower().rstrip("."))
+    cleaned = re.sub(r"\s+", " ", cleaned.replace(",", " ")).strip()
+    if cleaned == "today":
+        return today
+    if cleaned == "tomorrow":
+        return today + timedelta(days=1)
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(cleaned, fmt).date()
+        except ValueError:
+            pass
+    for fmt in _DATE_FORMATS_NO_YEAR:
+        try:
+            parsed = datetime.strptime(f"{cleaned} {today.year}", f"{fmt} %Y").date()
+        except ValueError:
+            continue
+        return parsed if parsed >= today else parsed.replace(year=today.year + 1)
+    return None
+
+
 def _handle_date(whatsapp_id, text):
-    try:
-        datetime.strptime(text, "%Y-%m-%d")
-    except ValueError:
-        return "Please use the format YYYY-MM-DD, e.g. 2026-10-05."
-    update_pending_event_creation(whatsapp_id, step="awaiting_time", event_date=text)
-    return "What time? (e.g. 5:00 PM)"
+    event_date = parse_event_date(text)
+    if event_date is None:
+        return "I didn't recognise that date -- try e.g. 'tomorrow', '5 Oct' or 2026-10-05 (or 'cancel')."
+    today = datetime.now(_NAIROBI).date()
+    if event_date < today:
+        return f"That date ({event_date:%d %b %Y}) has already passed -- please send a date from today onwards."
+    if event_date > today + timedelta(days=366):
+        return f"That's more than a year away ({event_date:%d %b %Y}) -- please check the date."
+    update_pending_event_creation(whatsapp_id, step="awaiting_time", event_date=event_date.isoformat())
+    return f"{event_date:%A %d %b %Y} -- got it. What time? (e.g. 5:00 PM)"
 
 
 def _handle_time(whatsapp_id, text):
@@ -295,10 +335,15 @@ def _handle_choosing_event(whatsapp_id, text):
     return f"Will you be at {event['title']} on {event['event_date']}?\n\nReply YES, NO, or MAYBE."
 
 
+_MAYBE = re.compile(r"^(maybe|not sure|perhaps|might|i might|probably|possibly|labda)\b")
+
+
 def _handle_awaiting_response(whatsapp_id, text, pending):
-    answer = text.strip().lower()
-    if answer not in ("yes", "no", "maybe"):
-        return "Please reply YES, NO, or MAYBE."
+    # How people actually answer ("yeah I'll come", "sure", "nope", "not sure") -- fixed
+    # 2026-10-01 (QA): only the exact words yes/no/maybe used to count.
+    answer = "maybe" if _MAYBE.match(conversation.normalise(text)) else conversation.yes_no(text)
+    if answer is None:
+        return "Please reply YES, NO, or MAYBE (or 'cancel' to stop)."
 
     event = get_event_by_id(pending["event_id"])
     set_rsvp(pending["event_id"], whatsapp_id, answer, _now())

@@ -52,6 +52,7 @@ from app.models.withdrawal import init_consent_withdrawals_table
 from app.models.study_guide import init_study_guide_tables
 from app.services.withdrawal import finish_pending_withdrawals
 from app.services.guide_payments import check_unsettled_purchases
+from app.models.pending_message import forget_old_message_ids
 from app.services.reporting import send_weekly_digest
 from app.services.feedback_themes import sort_pending_feedback
 from app.services.scheduler import start_scheduler, register_task, register_every_check_task
@@ -163,6 +164,8 @@ def create_app():
     # M-Pesa safety net: asks Safaricom directly about any study-guide payment still
     # pending after 2 minutes, in case its callback never arrived. See guide_payments.py.
     register_every_check_task("check_unsettled_guide_payments", check_unsettled_purchases)
+    # Forgets Meta message IDs older than a week (repeat-delivery protection, webhook.py).
+    register_every_check_task("forget_old_message_ids", forget_old_message_ids)
 
     if run_workers:
         start_scheduler()

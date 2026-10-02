@@ -71,18 +71,21 @@ def get_event_by_id(event_id):
 def get_upcoming_events(event_type=None):
     """
     Every event from today onward, soonest first. Optionally filtered
-    to one event_type ("tracked" or "broadcast").
+    to one event_type ("tracked" or "broadcast"). Same-day events keep a
+    FIXED order (by id): the RSVP list is fetched again when the member
+    replies with a number, and without a tie-breaker "2" could point to a
+    different event than the one shown (found in QA testing, 2026-10-01).
     """
     conn = get_connection()
     cursor = conn.cursor()
     if event_type:
         cursor.execute(
-            "SELECT * FROM events WHERE event_date >= CURRENT_DATE AND event_type = %s ORDER BY event_date ASC",
+            "SELECT * FROM events WHERE event_date >= CURRENT_DATE AND event_type = %s ORDER BY event_date ASC, id ASC",
             (event_type,)
         )
     else:
         cursor.execute(
-            "SELECT * FROM events WHERE event_date >= CURRENT_DATE ORDER BY event_date ASC"
+            "SELECT * FROM events WHERE event_date >= CURRENT_DATE ORDER BY event_date ASC, id ASC"
         )
     rows = cursor.fetchall()
     cursor.close()

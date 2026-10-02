@@ -35,6 +35,38 @@ def init_pending_messages_table():
             claimed_at TIMESTAMP
         )
     """)
+    # Meta's message IDs already accepted (QA 2026-10-01): Meta re-sends a
+    # webhook it thinks failed, and the same message used to be processed --
+    # and answered -- twice. Kept 7 days (see forget_old_message_ids).
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS processed_messages (
+            message_id TEXT PRIMARY KEY,
+            received_at TIMESTAMP NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC')
+        )
+    """)
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def claim_message_id(message_id):
+    """True the FIRST time a Meta message ID is seen; False for a repeat delivery (atomic)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO processed_messages (message_id) VALUES (%s) ON CONFLICT DO NOTHING RETURNING message_id",
+                   (message_id,))
+    first_time = cursor.fetchone() is not None
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return first_time
+
+
+def forget_old_message_ids():
+    """Every scheduler check: Meta only re-sends within hours, so a week of IDs is plenty."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM processed_messages WHERE received_at < (NOW() AT TIME ZONE 'UTC') - INTERVAL '7 days'")
     conn.commit()
     cursor.close()
     conn.close()

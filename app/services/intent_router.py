@@ -85,6 +85,7 @@ from app.services import exec_roles
 from app.services import reporting
 from app.services import dashboard
 from app.services import withdrawal
+from app.services import conversation
 from app.services import study_guides
 from app.services.message_generator import display_name_for
 from app.services.group_query import answer_group_question
@@ -99,11 +100,11 @@ INTENT_DEFINITIONS = {
     "greeting_smalltalk": "Casual greeting, small talk, thanks, or chit-chat with no specific request.",
     "general_question": "A general question about the organization, its beliefs, its constitution, or its activities -- NOT about specific Bible study groups, group leaders, or group membership, and NOT about what members have said, recommended or reported (feedback, suggestions, attendance -- those are leadership_query). Even a short follow-up like 'what about X' or 'and Y?' belongs to group_query instead if the conversation was just discussing groups/leaders/membership -- don't default here just because the message doesn't say the word 'group'.",
     "pastoral_question": "A personal or pastoral question about the member's OWN spiritual life, relationships, struggles or a decision they face, asking for guidance rather than information (e.g. 'I keep falling into the same sin, what should I do?', 'should I leave my church?') -- WITHOUT signs of real distress or crisis (that is needs_support).",
-    "list_events": "Asking what events or activities are coming up -- a read-only question, NOT wanting to RSVP.",
-    "event_rsvp": "Wanting to RSVP (yes/no/maybe) to a specific upcoming event -- NOT just asking what's coming up.",
+    "list_events": "Asking what events or activities are coming up, or whether something is on today/this week (e.g. 'iko fellowship leo?', 'any events this week') -- a read-only question, NOT wanting to RSVP.",
+    "event_rsvp": "Wanting to RSVP (yes/no/maybe) to a specific upcoming event, or saying they will/won't come to one (e.g. 'nitakuja worship night', 'count me in for the hike') -- NOT just asking what's coming up.",
     "create_event": "A leader wanting to create/announce a new event (Bible Study, cell group, fellowship, or a broadcast-only gathering like Sunday service).",
-    "checkin_response": "Explaining or giving a reason for missing a session or event.",
-    "feedback_response": "Giving feedback, a rating, or comments about a past event.",
+    "checkin_response": "Saying they missed, or won't make it to, a session or event, or giving a reason why -- including Sheng/English mixes like 'nimeskip fellowship leo', 'sitafika', 'niko attachment so I won't make it', 'nilikuwa class'.",
+    "feedback_response": "Giving feedback, praise, a complaint or comments about a past session or event (e.g. 'worship last Friday was amazing', 'Bible study was too long') -- even if it sounds like chit-chat.",
     "purchase_study_guide": "Wanting to buy or pay for a Bible Study guide, or asking about their own study-guide purchase (whether they've paid, where to collect it).",
     "start_study_guide": "An exec leader wanting to START or set up a NEW semester's study guide for sale (its title and price) -- not someone wanting to buy one.",
     "update_details": "Wanting to change their own registered details (e.g. area, year of study, name).",
@@ -319,7 +320,7 @@ CONFIRMATION_QUESTIONS = {
         "Just to confirm: you'll stop receiving follow-up check-ins if you "
         "miss Bible study, fellowships, or events. You'll still be a fully "
         "registered member -- this only affects check-ins, nothing else. "
-        "Your group leader will be let know, so they can stay in touch "
+        "Your group leader will be told, so they can stay in touch "
         "with you personally.\n\n"
         "Reply YES to confirm, or NO to cancel."
     ),
@@ -563,8 +564,20 @@ def _run_checkin_job(whatsapp_id):
     send_whatsapp_message(whatsapp_id, summary)
 
 
+# A question that ONLY points back at something earlier ("explain verse 2", "what does that mean?").
+# The companion reads each question on its own, so it can't know which passage is meant -- in QA
+# testing (2026-10-01) "Explain verse 2" was answered as Article 2 of the constitution (the logo).
+_NEEDS_CONTEXT = re.compile(
+    r"^(explain |what about |and |what does |what is |meaning of |tell me about )?(verse|v)\s*\d+( mean)?$"
+    r"|^(what does (that|this|it) mean|explain (that|this|it)( more)?|tell me more|what do you mean|meaning|why|and then|go on)$")
+
+
 def _handle_general_question(member, text):
     """Stage 12: answered from DeKUTCU's own materials, with citations -- see rag_companion.py."""
+    if _NEEDS_CONTEXT.match(conversation.normalise(text)):
+        return ("Could you give me the full reference or topic? For example: \"Explain Romans 12:2\" or "
+                "\"What does the CU believe about baptism?\" -- I read each question on its own, so a short "
+                "follow-up like that doesn't tell me which passage you mean.")
     return rag_companion.answer_question(member, text, pastoral=False)
 
 
@@ -757,20 +770,29 @@ def handle_pending_action_response(whatsapp_id, text):
     """
     Called by webhook.py when a member has a pending action awaiting
     YES/NO confirmation. Executes or cancels it accordingly. Returns
-    the reply text.
+    the reply text -- or None if the reply wasn't a yes or a no (then
+    webhook.py handles the message normally).
     """
     pending = get_pending_action(whatsapp_id)
     if pending is None:
         return None  # shouldn't happen -- webhook.py only calls this when one exists
 
     action = pending["action"]
-    answer = text.strip().lower()
+    answer = conversation.yes_no(text)
 
-    if answer not in ("yes", "no"):
-        # Re-ask rather than silently falling through to the intent
-        # router -- a half-confirmed serious action shouldn't be lost
-        # to an ambiguous reply.
-        return f"Please reply YES or NO.\n\n{_confirmation_text(action, whatsapp_id)}"
+    if answer is None:
+        # Not a yes or a no (fixed 2026-10-01, QA): this used to re-ask
+        # forever, trapping the member -- and a "yes" meant for something
+        # else much later could then confirm the old request (in testing,
+        # a trapped withdrawal confirmation turned an unrelated "yes" into
+        # deleting the member's records). Now the request is dropped
+        # WITHOUT acting -- the safe direction for every one of these
+        # actions -- and webhook.py routes the message normally. A leader
+        # nomination is the exception: it's an invitation the member
+        # didn't start, so it stays open for a later YES/NO.
+        if action != "accept_leader_nomination":
+            clear_pending_action(whatsapp_id)
+        return None
 
     clear_pending_action(whatsapp_id)
 
@@ -816,6 +838,12 @@ def handle_message(whatsapp_id, message_text):
     flows have their own dedicated step-tracking and don't need this.
     """
     member = get_member_by_whatsapp_id(whatsapp_id)
+    # Answered without the AI (QA 2026-10-01): "help"/"menu" got "Sorry, I didn't
+    # quite catch that", and "cancel"/"start over" with nothing in progress the same.
+    if conversation.is_help_request(message_text):
+        return conversation.HELP_TEXT
+    if conversation.is_cancel(message_text):
+        return "There's nothing in progress to cancel -- you're all clear.\n\n" + conversation.HELP_TEXT
     intent = classify_intent(message_text, whatsapp_id)
 
     # Group leaders (not exec) may ask for reports -- about their OWN group
@@ -849,8 +877,9 @@ def _handle_unclear(member, text):
     """
     return (
         "Sorry, I didn't quite catch that. I can help with things like what the CU "
-        "believes or how it's run, your Bible Study group, upcoming events, or "
-        "connecting you with a leader. What would you like to know?"
+        "believes or how it's run, your Bible Study group, upcoming events, the "
+        "study guide, or connecting you with a leader. What would you like to know? "
+        "(Say 'help' to see everything.)"
     )
 
 
@@ -871,6 +900,23 @@ def _handle_smalltalk(member, text):
     return f"Hey {first}! How can I help?"
 
 
+def _handle_checkin_response(member, text):
+    """
+    A member explaining an absence WITHOUT being asked ("I missed fellowship, I had class"). Used to
+    get a developer placeholder ("Check-in handling is coming in a later stage" -- QA 2026-10-01).
+    Not recorded as an absence -- which activity and date isn't known; recorded absences come from
+    the check-ins and Bible Study marking. The same safety check as everywhere else comes first.
+    """
+    severity = escalation.assess_severity(text)
+    if severity == "acute_risk":
+        return escalation.escalate_acute(member, "needs_support", text)
+    if severity == "distress":
+        return escalation.start_consent_flow(member["whatsapp_id"], "needs_support", text)
+    first = member["name"].split()[0]
+    return (f"Thanks for letting me know, {first} -- we missed you, and we'd love to see you next time. "
+            "If something's making it hard to come, just tell me and I can connect you with a leader.")
+
+
 def _handle_stub(feature_name):
     def handler(member, text):
         return f"({feature_name} is coming in a later stage -- thanks for your patience!)"
@@ -884,7 +930,7 @@ _STUB_HANDLERS = {
     "list_events": _handle_list_events,
     "event_rsvp": _handle_event_rsvp,
     "create_event": _handle_create_event,
-    "checkin_response": _handle_stub("Check-in handling"),
+    "checkin_response": _handle_checkin_response,
     "feedback_response": _handle_feedback_response,
     "purchase_study_guide": lambda member, text: study_guides.begin_purchase(member),
     "start_study_guide": lambda member, text: study_guides.begin_start_guide(member),

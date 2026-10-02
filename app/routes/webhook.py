@@ -13,6 +13,8 @@ What this file does, in plain terms:
 3. We read the message out of that POST request and route it.
 """
 
+import hashlib
+import hmac
 import os
 import time
 import threading
@@ -20,22 +22,23 @@ from flask import Blueprint, request, jsonify
 
 from app.models.pending_registration import get_pending_registration, delete_pending_registration
 from app.models.pending_action import get_pending_action
-from app.models.pending_leader_nomination import get_pending_leader_nomination
-from app.models.pending_area_change import get_pending_area_change
-from app.models.pending_reassignment_resolution import get_pending_reassignment_resolution
-from app.models.pending_event_creation import get_pending_event_creation
-from app.models.pending_rsvp import get_pending_rsvp
+from app.models.pending_leader_nomination import get_pending_leader_nomination, delete_pending_leader_nomination
+from app.models.pending_area_change import get_pending_area_change, delete_pending_area_change
+from app.models.pending_reassignment_resolution import get_pending_reassignment_resolution, delete_pending_reassignment_resolution
+from app.models.pending_event_creation import get_pending_event_creation, delete_pending_event_creation
+from app.models.pending_rsvp import get_pending_rsvp, delete_pending_rsvp
 from app.models.pending_attendance_marking import get_pending_attendance_marking
 from app.models.pending_fellowship_checkin import get_pending_fellowship_checkin
 from app.models.pending_reason_capture import get_pending_reason_capture
 from app.models.pending_escalation_consent import get_pending_escalation_consent
 from app.models.pending_feedback import get_pending_feedback
-from app.models.pending_exec_role import get_pending_exec_role
+from app.models.pending_exec_role import get_pending_exec_role, delete_pending_exec_role
 from app.models.member_question import get_pending_question_ask
 from app.models.pending_message import (
     enqueue_message,
     claim_next_message,
     delete_pending_message,
+    claim_message_id,
 )
 from app.services.registration import is_registered, start_registration, handle_message
 from app.services.intent_router import (
@@ -57,6 +60,7 @@ from app.services import feedback
 from app.services import exec_roles
 from app.services import member_questions
 from app.services import study_guides
+from app.services import conversation
 from app.models.study_guide import get_pending_guide_creation, get_pending_guide_purchase
 from app.services.whatsapp_client import send_whatsapp_message
 
@@ -113,9 +117,17 @@ def _process_queue_shard(shard_index):
             continue
         try:
             reply_text = route_incoming_message(message["sender_number"], message["message_text"])
-            send_whatsapp_message(to_number=message["sender_number"], message_text=reply_text)
+            send_whatsapp_message(to_number=message["sender_number"],
+                                  message_text=reply_text or "Sorry, I didn't quite catch that -- could you say it another way?")
         except Exception as e:
             print(f"Background message processing failed for {message['sender_number']}: {e}")
+            # QA 2026-10-01: a failure used to leave the member with NO reply at all.
+            # Never include the error itself -- nothing internal reaches a member.
+            try:
+                send_whatsapp_message(to_number=message["sender_number"],
+                                      message_text="Sorry, something went wrong on my end -- please try again in a moment.")
+            except Exception as send_error:
+                print(f"Couldn't send the apology either: {send_error}")
         finally:
             delete_pending_message(message["id"])
 
@@ -147,31 +159,75 @@ def receive_message():
     """
     Handles every REAL incoming WhatsApp message from here on.
     """
-    data = request.get_json()
-    print("Incoming webhook data:", data)
+    if not _signature_ok(request):
+        print("Webhook REFUSED: missing or invalid X-Hub-Signature-256 (not from Meta).")
+        return jsonify({"status": "forbidden"}), 403
+
+    data = request.get_json(silent=True) or {}
 
     try:
-        entry = data["entry"][0]
-        changes = entry["changes"][0]
-        value = changes["value"]
-
-        if "messages" not in value:
-            return jsonify({"status": "ignored, not a message"}), 200
-
-        message = value["messages"][0]
-        sender_number = message["from"]
-        message_text = message["text"]["body"]
-
-        print(f"Message from {sender_number}: {message_text}")
-
-        backlog_count = enqueue_message(sender_number, message_text)
-        if backlog_count >= _BACKLOG_FILLER_THRESHOLD:
-            send_whatsapp_message(to_number=sender_number, message_text=_FILLER_REPLY)
-
-    except (KeyError, IndexError) as e:
+        for entry in data.get("entry", []):
+            for change in entry.get("changes", []):
+                for message in change.get("value", {}).get("messages", []):
+                    _accept_message(message)
+    except (KeyError, IndexError, TypeError, AttributeError) as e:
         print(f"Could not parse incoming webhook: {e}")
 
     return jsonify({"status": "received"}), 200
+
+
+# Message types members can send that the bot can't read. Reactions and system notices are ignored silently.
+_SILENT_TYPES = {"reaction", "system", "unsupported", "ephemeral", "request_welcome"}
+_NOT_TEXT_REPLY = ("I can only read typed text messages for now -- please type what you need and I'll help 🙂")
+
+
+def _accept_message(message):
+    """
+    One incoming message. QA 2026-10-01 fixes:
+      - Meta re-sends a webhook it thinks failed: each message ID is accepted once only;
+      - images, stickers, voice notes, locations... used to get NO reply at all -- now a short
+        note that only text is understood (sent at once, nothing queued);
+      - every message in a delivery is handled, not just the first.
+    """
+    sender_number = message["from"]
+    message_id = message.get("id")
+    if message_id and not claim_message_id(message_id):
+        print(f"Ignoring a repeat delivery of message {message_id}")
+        return
+    kind = message.get("type", "text")
+    if kind != "text" or "text" not in message:
+        if kind not in _SILENT_TYPES:
+            send_whatsapp_message(to_number=sender_number, message_text=_NOT_TEXT_REPLY)
+        return
+    message_text = message["text"]["body"]
+    backlog_count = enqueue_message(sender_number, message_text)
+    if backlog_count >= _BACKLOG_FILLER_THRESHOLD:
+        send_whatsapp_message(to_number=sender_number, message_text=_FILLER_REPLY)
+
+
+_warned_no_app_secret = []
+
+
+def _signature_ok(req):
+    """
+    Proves a webhook POST really came from Meta (QA 2026-10-01): Meta signs every delivery with
+    the app secret -- header X-Hub-Signature-256: sha256=<HMAC-SHA256 of the raw body>. Without
+    this check, anyone who learned the webhook address could post messages "from" any number,
+    including a leader's, and the bot would act on them.
+
+    META_APP_SECRET (Meta app dashboard -> App settings -> Basic -> App secret) must be set in
+    .env and on Render. Until it is, requests are still accepted -- so adding this can't take
+    the live bot down -- with a loud warning in the logs.
+    """
+    secret = os.getenv("META_APP_SECRET", "").strip()
+    if not secret:
+        if not _warned_no_app_secret:
+            print("WARNING: META_APP_SECRET is not set -- webhook signatures are NOT being checked.")
+            _warned_no_app_secret.append(True)
+        return True
+    header = req.headers.get("X-Hub-Signature-256", "")
+    expected = "sha256=" + hmac.new(secret.encode(), req.get_data(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(header, expected)
 
 
 def route_incoming_message(sender_number, message_text):
@@ -226,41 +282,26 @@ def route_incoming_message(sender_number, message_text):
             reply = member_questions.handle_answer(sender_number, message_text)
             if reply is not None:
                 return reply
+        # A way out of anything the member STARTED (QA 2026-10-01: flows used to
+        # trap people until they typed exactly "cancel").
+        if conversation.is_cancel(message_text):
+            cleared = _cancel_started_flows(sender_number)
+            if cleared:
+                return _cancelled_reply(cleared)
+        # A question or a sentence at a step expecting a number, date or choice is
+        # a NEW message: drop that flow and handle the message normally.
+        note = _escape_structured_step(sender_number, message_text)
+        if note:
+            return route_incoming_message(sender_number, message_text) + note
         if get_pending_action(sender_number) is not None:
-            return handle_pending_action_response(sender_number, message_text)
-        if get_pending_leader_nomination(sender_number) is not None:
-            return leader_assignment.handle_message(sender_number, message_text)
-        if get_pending_area_change(sender_number) is not None:
-            return area_change.handle_message(sender_number, message_text)
-        if get_pending_reassignment_resolution(sender_number) is not None:
-            return area_change.handle_resolution_message(sender_number, message_text)
-        if get_pending_exec_role(sender_number) is not None:
-            return exec_roles.handle_message(sender_number, message_text)
-        if get_pending_event_creation(sender_number) is not None:
-            return event_manager.handle_create_event_message(sender_number, message_text)
-        if get_pending_guide_creation(sender_number) is not None:
-            # An exec leader starting a new study guide -- expires after 30
-            # minutes, then the message is routed normally (study_guides.py).
-            reply = study_guides.handle_start_guide_message(sender_number, message_text)
+            reply = handle_pending_action_response(sender_number, message_text)
             if reply is not None:
                 return reply
-        if get_pending_guide_purchase(sender_number) is not None:
-            # "Which number should I send the M-Pesa prompt to?" -- anything that isn't
-            # an answer drops the question and is routed normally (study_guides.py).
-            reply = study_guides.handle_purchase_reply(sender_number, message_text)
-            if reply is not None:
-                return reply
-        if get_pending_rsvp(sender_number) is not None:
-            return event_manager.handle_rsvp_message(sender_number, message_text)
-        if get_pending_attendance_marking(sender_number) is not None:
-            # A leader's "who was absent?" question stays open until answered;
-            # a message that isn't an answer is routed normally, with ONE gentle
-            # reminder the first time (fixed 2026-09-30 -- it used to trap them).
-            reply = attendance.handle_attendance_marking_message(sender_number, message_text)
-            if reply is not None:
-                return reply
-            return _route_remaining(sender_number, message_text) + attendance.take_reminder(sender_number)
-        return _route_remaining(sender_number, message_text)
+            # Not a yes/no: the confirmation was dropped WITHOUT acting (a leader
+            # nomination invitation is kept), and the message is handled normally.
+            dropped = get_pending_action(sender_number) is None
+            return _route_after_confirmation(sender_number, message_text) + (_NOTHING_CHANGED if dropped else "")
+        return _route_after_confirmation(sender_number, message_text)
 
     if get_pending_registration(sender_number) is not None:
         return handle_message(sender_number, message_text)
@@ -268,10 +309,127 @@ def route_incoming_message(sender_number, message_text):
     return start_registration(sender_number)
 
 
+def _route_after_confirmation(sender_number, message_text):
+    """A registered member's routing after the YES/NO confirmation step."""
+    if get_pending_leader_nomination(sender_number) is not None:
+        return leader_assignment.handle_message(sender_number, message_text)
+    if get_pending_area_change(sender_number) is not None:
+        return area_change.handle_message(sender_number, message_text)
+    if get_pending_reassignment_resolution(sender_number) is not None:
+        return area_change.handle_resolution_message(sender_number, message_text)
+    if get_pending_exec_role(sender_number) is not None:
+        return exec_roles.handle_message(sender_number, message_text)
+    if get_pending_event_creation(sender_number) is not None:
+        return event_manager.handle_create_event_message(sender_number, message_text)
+    if get_pending_guide_creation(sender_number) is not None:
+        # An exec leader starting a new study guide -- expires after 30
+        # minutes, then the message is routed normally (study_guides.py).
+        reply = study_guides.handle_start_guide_message(sender_number, message_text)
+        if reply is not None:
+            return reply
+    if get_pending_guide_purchase(sender_number) is not None:
+        # "Which number should I send the M-Pesa prompt to?" -- anything that isn't
+        # an answer drops the question and is routed normally (study_guides.py).
+        reply = study_guides.handle_purchase_reply(sender_number, message_text)
+        if reply is not None:
+            return reply
+    if get_pending_rsvp(sender_number) is not None:
+        return event_manager.handle_rsvp_message(sender_number, message_text)
+    if get_pending_attendance_marking(sender_number) is not None:
+        # A leader's "who was absent?" question stays open until answered;
+        # a message that isn't an answer is routed normally, with ONE gentle
+        # reminder the first time (fixed 2026-09-30 -- it used to trap them).
+        reply = attendance.handle_attendance_marking_message(sender_number, message_text)
+        if reply is not None:
+            return reply
+        return _route_remaining(sender_number, message_text) + attendance.take_reminder(sender_number)
+    return _route_remaining(sender_number, message_text)
+
+
+_NOTHING_CHANGED = "\n\n(I didn't go ahead with that earlier request -- just ask again if you still want it.)"
+
+# Flows a member STARTS themselves, cleared by "cancel" / "never mind" / "start over"...
+# (Bot-initiated questions -- attendance marking, check-ins, reasons, feedback, consent --
+# have their own fall-through rules.)
+_STARTED_FLOW_TABLES = [
+    "pending_leader_nominations", "pending_area_changes", "pending_reassignment_resolutions", "pending_exec_role",
+    "pending_event_creation", "pending_rsvps", "pending_guide_creation", "pending_guide_purchase",
+]
+
+
+def _cancel_started_flows(sender_number):
+    """
+    Clears every member-started flow (and any YES/NO confirmation except a leader-nomination
+    invitation). Returns the names of the tables that had something open (empty if nothing was).
+    """
+    from app.database import get_connection
+    conn = get_connection()
+    cursor = conn.cursor()
+    cleared = []
+    for table in _STARTED_FLOW_TABLES:
+        cursor.execute(f"DELETE FROM {table} WHERE whatsapp_id = %s", (sender_number,))
+        if cursor.rowcount:
+            cleared.append(table)
+    cursor.execute("DELETE FROM pending_actions WHERE whatsapp_id = %s AND action <> 'accept_leader_nomination'", (sender_number,))
+    if cursor.rowcount:
+        cleared.append("pending_actions")
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return cleared
+
+
+def _cancelled_reply(cleared):
+    """Says plainly what didn't happen where it matters -- above all, that no payment was started."""
+    if "pending_guide_purchase" in cleared:
+        return "Okay -- no payment was started. Ask me anytime if you'd like to buy the guide."
+    if "pending_guide_creation" in cleared:
+        return "Okay -- no new study guide was started."
+    if "pending_actions" in cleared:
+        return "Okay, I've stopped that -- nothing has changed. What would you like to do next?"
+    return "Okay, I've stopped that. What would you like to do next?"
+
+
+# (getter, steps that expect a number/date/choice -- None means every step, deleter, what to call it, how to restart)
+def _structured_flows():
+    return [
+        (get_pending_rsvp, None, delete_pending_rsvp, "the RSVP", "RSVP"),
+        (get_pending_event_creation, {"awaiting_type", "awaiting_date", "awaiting_time", "awaiting_confirm"},
+         delete_pending_event_creation, "creating the event", "create an event"),
+        (get_pending_leader_nomination, {"awaiting_area", "awaiting_bypass_choice", "awaiting_candidate_source_area",
+                                         "removing_leader", "resolving_pending"},
+         delete_pending_leader_nomination, "the group-leader change", "nominate a group leader"),
+        (get_pending_exec_role, {"awaiting_area", "awaiting_office"}, delete_pending_exec_role,
+         "recording exec roles", "update the exec roles"),
+        (get_pending_area_change, None, delete_pending_area_change, "the area change", "change my area"),
+        (get_pending_reassignment_resolution, None, delete_pending_reassignment_resolution,
+         "the reassignments", "resolve reassignments"),
+    ]
+
+
+def _escape_structured_step(sender_number, message_text):
+    """If the member is at a structured step and this reads as a new message, drop that flow; returns a short note (or '')."""
+    if not conversation.looks_like_new_request(message_text):
+        return ""
+    for getter, steps, deleter, what, restart in _structured_flows():
+        pending = getter(sender_number)
+        if pending is None:
+            continue
+        if steps is not None and pending.get("step") not in steps:
+            return ""      # a free-text step (a title, a name): sentences are normal answers there
+        deleter(sender_number)
+        return f"\n\n(I've stopped {what} -- say \"{restart}\" whenever you want to pick it up again.)"
+    return ""
+
+
 def _route_remaining(sender_number, message_text):
     """The rest of a registered member's routing, after the attendance-marking step."""
     if get_pending_fellowship_checkin(sender_number) is not None:
-        return fellowship_checkin.handle_checkin_message(sender_number, message_text)
+        # "Were you at X today?" -- a question or unrelated message isn't an answer (QA
+        # 2026-10-01: it used to be recorded as an absence); then it's handled normally.
+        reply = fellowship_checkin.handle_checkin_message(sender_number, message_text)
+        if reply is not None:
+            return reply
     if get_pending_reason_capture(sender_number) is not None:
         # Can hand the message back (expired, or not actually a reason) --
         # then it's routed normally, like feedback.

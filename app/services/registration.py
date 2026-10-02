@@ -24,6 +24,7 @@ Design limits (deliberate, not oversights -- see Stage 3 discussion):
     territory (Stage 4) and out of scope here.
 """
 
+import re
 from datetime import datetime, timezone
 
 from app.models.member import (
@@ -32,6 +33,7 @@ from app.models.member import (
     create_member,
     relink_whatsapp_id,
 )
+from app.services import conversation
 from app.models.pending_registration import (
     get_pending_registration,
     start_pending_registration,
@@ -140,7 +142,7 @@ def handle_message(whatsapp_id, message_text):
     """
     text = message_text.strip()
 
-    if text.lower() == "cancel":
+    if conversation.is_cancel(text):
         delete_pending_registration(whatsapp_id)
         return "Registration cancelled. Message me again anytime to restart."
 
@@ -194,9 +196,24 @@ def _advance(whatsapp_id, pending, field_updates, next_step_if_normal, normal_re
     return normal_reply
 
 
+def normalise_reg_number(text):
+    """'c026 -01-0735/2023' -> 'C026-01-0735/2023' -- one student, one form (QA 2026-10-01: typed variants made duplicate accounts)."""
+    return re.sub(r"\s+", "", (text or "").upper())
+
+
+def _looks_like_reg_number(reg):
+    """A plausible DeKUT registration number: letters/digits with '-' or '/', at least 4 digits, and a '/YEAR'-style part."""
+    return bool(re.fullmatch(r"[A-Z0-9][A-Z0-9/\-]{5,24}", reg)) and sum(c.isdigit() for c in reg) >= 4 and "/" in reg
+
+
 def _handle_reg_number(whatsapp_id, text, pending):
-    if not text:
-        return f"That doesn't look like a valid registration number. Please try again.\n(e.g. {REG_NUMBER_EXAMPLE})"
+    if conversation.looks_like_new_request(text) or conversation.is_help_request(text):
+        # QA 2026-10-01: a question here used to be saved AS the registration number.
+        return ("I'll be able to help with that once you're registered -- it only takes a minute.\n\n"
+                f"{_reg_number_question()}\n(Or reply 'cancel' to stop.)")
+    text = normalise_reg_number(text)
+    if not _looks_like_reg_number(text):
+        return f"That doesn't look like a registration number. Please send it like this: {REG_NUMBER_EXAMPLE}"
 
     # Returning member messaging from a new/different phone number --
     # recognize them by reg_number and just relink, skipping the rest
@@ -220,8 +237,14 @@ def _handle_reg_number(whatsapp_id, text, pending):
 
 
 def _handle_name(whatsapp_id, text, pending):
-    if not text:
-        return "Please enter your name."
+    # QA 2026-10-01: anything was accepted as a name -- a question, "hello", 300 characters.
+    if "?" in text:
+        return "I'll answer that once you're registered! For now -- what's your full name?"
+    letters = sum(c.isalpha() for c in text)
+    if letters < 2 or len(text) > 60 or any(c.isdigit() for c in text):
+        return "Please send your full name as it appears on your student ID (letters only, e.g. Mary Wanjiru)."
+    if conversation.normalise(text) in {"hi", "hello", "hey", "sasa", "niaje", "yes", "no", "ok", "okay"}:
+        return "What's your full name? (e.g. Mary Wanjiru)"
 
     return _advance(
         whatsapp_id, pending,
@@ -297,8 +320,8 @@ def _handle_area(whatsapp_id, text, pending):
 
 
 def _handle_data_consent(whatsapp_id, text, pending):
-    answer = text.lower()
-    if answer not in ("yes", "no"):
+    answer = conversation.strict_yes_no(text)
+    if answer is None:
         return "Please reply YES or NO."
 
     if answer == "no":
@@ -310,8 +333,8 @@ def _handle_data_consent(whatsapp_id, text, pending):
 
 
 def _handle_followup_consent(whatsapp_id, text, pending):
-    answer = text.lower()
-    if answer not in ("yes", "no"):
+    answer = conversation.strict_yes_no(text)
+    if answer is None:
         return "Please reply YES or NO."
 
     followup_consent = (answer == "yes")
@@ -340,7 +363,7 @@ def _confirmation_summary_text(pending):
 def _handle_confirmation(whatsapp_id, text, pending):
     lowered = text.strip().lower()
 
-    if lowered == "yes":
+    if conversation.strict_yes_no(text) == "yes":
         create_member(
             reg_number=pending["reg_number"],
             whatsapp_id=whatsapp_id,
