@@ -51,7 +51,7 @@ _PENDING_TABLES = [
     "pending_event_creation", "pending_exec_role", "pending_feedback", "pending_fellowship_checkin",
     "pending_leader_nominations", "pending_question_ask", "pending_reason_capture",
     "pending_reassignment_resolutions", "pending_registrations", "pending_rsvps", "pending_guide_creation",
-    "pending_guide_purchase", "pending_announcement",
+    "pending_guide_purchase", "pending_announcement", "pending_coordinator_choice",
 ]
 
 
@@ -115,6 +115,9 @@ def anonymise(member):
     Deletes the member's own words and record, and detaches everything else from them.
     One transaction: if any step fails, nothing changes.
     """
+    # If they were the Guides Coordinator, the role falls vacant and the Director is told.
+    from app.services import guide_coordinator
+    guide_coordinator.on_member_leaving(member["reg_number"])
     token = ANON_PREFIX + secrets.token_hex(6)
     reg, wa = member["reg_number"], member["whatsapp_id"]
     steps = [
@@ -141,6 +144,7 @@ def anonymise(member):
         ("UPDATE announcements SET sent_by_reg_number = %(t)s WHERE sent_by_reg_number = %(r)s", None),
         # Number-change requests hold their phone numbers -- nothing worth keeping.
         ("DELETE FROM number_changes WHERE reg_number = %(r)s", None),
+        ("UPDATE guide_coordinator SET appointed_by_reg_number = %(t)s WHERE appointed_by_reg_number = %(r)s", None),
         ("UPDATE discipleship_team SET added_by_reg_number = %(t)s WHERE added_by_reg_number = %(r)s", None),
         ("DELETE FROM dashboard_login_codes WHERE reg_number = %(r)s", None),
         ("DELETE FROM pending_leader_nominations WHERE candidate_reg_number = %(r)s", None),

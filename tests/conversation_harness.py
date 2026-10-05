@@ -48,6 +48,7 @@ INTENT_RULES = [
     (r"\b(talk to (a )?(leader|human|person)|speak to someone)\b", "request_human"),
     (r"\bstart (a )?new study guide\b", "start_study_guide"),
     (r"\b(buy|purchase|pay for)\b.*\bguide\b", "purchase_study_guide"),
+    (r"\b(guides? coordinator|in charge of the guides|handle the guides)\b", "appoint_guides_coordinator"),
     (r"\b(changing my number|change my number|new (whatsapp )?number|new line)\b", "change_number"),
     (r"\b(announce|announcement|send a notice|tell (all|every))", "send_announcement"),
     (r"\b(rsvp)\b", "event_rsvp"),
@@ -152,7 +153,7 @@ _SEND_MODULES = [
     "app.services.escalation", "app.services.event_manager", "app.services.exec_roles", "app.services.fellowship_checkin",
     "app.services.intent_router", "app.services.leader_assignment", "app.services.member_questions",
     "app.services.reporting", "app.services.study_guides", "app.services.withdrawal", "app.services.announcements",
-    "app.services.number_change",
+    "app.services.number_change", "app.services.guide_coordinator",
 ]
 _LLM_MODULES = [
     "app.services.escalation", "app.services.feedback", "app.services.feedback_themes", "app.services.group_query",
@@ -249,7 +250,7 @@ QA_PENDING_TABLES = [
     "pending_event_creation", "pending_exec_role", "pending_feedback", "pending_fellowship_checkin",
     "pending_leader_nominations", "pending_question_ask", "pending_reason_capture",
     "pending_reassignment_resolutions", "pending_registrations", "pending_rsvps", "pending_guide_creation",
-    "pending_guide_purchase", "pending_announcement", "conversation_history",
+    "pending_guide_purchase", "pending_announcement", "pending_coordinator_choice", "conversation_history",
 ]
 
 
@@ -282,6 +283,8 @@ def cleanup():
         q("DELETE FROM escalation_cases WHERE reg_number = ANY(%s)", (regs,), fetch=False)
         if _table_exists("announcements"):
             q("DELETE FROM announcements WHERE sent_by_reg_number = ANY(%s)", (regs,), fetch=False)
+        if _table_exists("guide_coordinator"):
+            q("DELETE FROM guide_coordinator WHERE reg_number = ANY(%s)", (regs,), fetch=False)
         q("DELETE FROM members WHERE reg_number = ANY(%s)", (regs,), fetch=False)
     q("DELETE FROM event_rsvps WHERE whatsapp_id LIKE %s", (like,), fetch=False)
     q("DELETE FROM event_rsvps WHERE event_id IN (SELECT id FROM events WHERE title LIKE %s)", (EVENT_PREFIX + "%",), fetch=False)

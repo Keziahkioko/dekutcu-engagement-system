@@ -52,6 +52,7 @@ from app.models.withdrawal import init_consent_withdrawals_table
 from app.models.study_guide import init_study_guide_tables
 from app.services.announcements import init_announcement_tables
 from app.services.number_change import init_number_change_table, check_number_changes
+from app.services.guide_coordinator import init_guide_coordinator_tables
 from app.services.withdrawal import finish_pending_withdrawals
 from app.services.guide_payments import check_unsettled_purchases
 from app.models.pending_message import forget_old_message_ids
@@ -120,6 +121,7 @@ def create_app():
     init_study_guide_tables()
     init_announcement_tables()
     init_number_change_table()
+    init_guide_coordinator_tables()
 
     run_workers = _should_run_background_workers()
     if run_workers:

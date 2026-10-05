@@ -13,6 +13,7 @@ TEST_SETS=(
   "Fuzz"
   "Announcements"
   "NumberChange"
+  "GuidesCoordinator"
 )
 i=0; pids=()
 for g in "${TEST_SETS[@]}"; do

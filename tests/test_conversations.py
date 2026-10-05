@@ -505,6 +505,103 @@ class NumberChange(unittest.TestCase):
         self.assertIn("already a request", H.say(other, owners[0][1]))
 
 
+class GuidesCoordinator(unittest.TestCase):
+    """Stage 14 step 4 part 1: one Guides Coordinator, appointed by the Discipleship Ministry Director."""
+
+    DIRECTOR = "Discipleship Ministry Director"
+
+    def setUp(self):
+        # The Director's office and the Coordinator are single positions shared by the whole database:
+        # save whatever is there and put it back afterwards.
+        self.saved_director = q("SELECT reg_number FROM members WHERE exec_office = %s", (self.DIRECTOR,))
+        self.saved_coordinator = q("SELECT * FROM guide_coordinator")
+        q("UPDATE members SET exec_office = NULL WHERE exec_office = %s", (self.DIRECTOR,), fetch=False)
+        q("DELETE FROM guide_coordinator", fetch=False)
+
+    def tearDown(self):
+        q("DELETE FROM guide_coordinator", fetch=False)
+        q("UPDATE members SET exec_office = NULL WHERE exec_office = %s", (self.DIRECTOR,), fetch=False)
+        for r in self.saved_director:
+            q("UPDATE members SET exec_office = %s WHERE reg_number = %s", (self.DIRECTOR, r["reg_number"]), fetch=False)
+        for r in self.saved_coordinator:
+            q("""INSERT INTO guide_coordinator (id, reg_number, appointed_by_reg_number, appointed_at)
+                 VALUES (TRUE, %s, %s, %s)""", (r["reg_number"], r["appointed_by_reg_number"], r["appointed_at"]), fetch=False)
+
+    def _director(self):
+        return student(name="Dc Director", leader=True, office=self.DIRECTOR)
+
+    def _coordinator_reg(self):
+        rows = q("SELECT reg_number FROM guide_coordinator")
+        return rows[0]["reg_number"] if rows else None
+
+    def _pick_number(self, wa):
+        from app.models.member import get_members_by_area
+        regs = [m["reg_number"] for m in get_members_by_area("Bomas")]
+        return str(regs.index(member_row(wa)["reg_number"]) + 1)
+
+    def test_director_appoints_someone_else_who_is_told(self):
+        director, candidate = self._director(), student(name="Peter Coordinator")
+        self.assertIn("Who should it be?", H.say(director, "appoint the guides coordinator"))
+        self.assertIn("Which area", H.say(director, "2"))
+        H.say(director, "1")                                  # Bomas -- every test member lives there
+        self.assertIn("Make Peter Coordinator", H.say(director, self._pick_number(candidate)))
+        self.assertIn("is now the Guides Coordinator", H.say(director, "yes"))
+        self.assertEqual(self._coordinator_reg(), member_row(candidate)["reg_number"])
+        self.assertIn("Guides Coordinator", H.sent_to(candidate)[-1])
+
+    def test_director_appoints_self_then_hands_over(self):
+        director, successor = self._director(), student(name="Next Coordinator")
+        say_all(director, ["appoint the guides coordinator", "1"])
+        self.assertIn("you're now the Guides Coordinator", H.say(director, "yes"))
+        say_all(director, ["appoint the guides coordinator", "2", "1", self._pick_number(successor), "yes"])
+        self.assertEqual(self._coordinator_reg(), member_row(successor)["reg_number"])
+        old_coord = student(name="Old Coord")
+        say_all(director, ["appoint the guides coordinator", "2", "1", self._pick_number(old_coord), "yes"])
+        self.assertIn("no longer the Guides Coordinator", H.sent_to(successor)[-1], "the previous holder is told")
+
+    def test_only_the_director_appoints_when_one_is_recorded(self):
+        self._director()
+        other_exec = student(name="Other Exec", leader=True)
+        self.assertIn("Only the Discipleship Ministry Director", H.say(other_exec, "appoint the guides coordinator"))
+        self.assertIn("didn't quite catch that", H.say(student(), "appoint the guides coordinator"))
+
+    def test_exec_leader_appoints_when_there_is_no_director(self):
+        exec_leader = student(name="Fallback Exec", leader=True)
+        say_all(exec_leader, ["appoint the guides coordinator", "1"])
+        self.assertIn("you're now the Guides Coordinator", H.say(exec_leader, "yes"))
+
+    def test_coordinator_who_is_not_a_leader_can_start_a_guide(self):
+        director, coord, member = self._director(), student(name="Plain Coord"), student()
+        say_all(director, ["appoint the guides coordinator", "2", "1", self._pick_number(coord), "yes"])
+        self.assertIn("guide's title", H.say(coord, "start a new study guide"))
+        H.say(coord, "cancel")
+        self.assertNotIn("guide's title", H.say(member, "start a new study guide"))
+
+    def test_vacant_role_falls_back_to_the_director(self):
+        from app.services.guide_coordinator import get_effective_coordinator
+        director = self._director()
+        say_all(director, ["appoint the guides coordinator", "3"])
+        self.assertIn("no Guides Coordinator now", H.say(director, "yes"))
+        self.assertEqual(get_effective_coordinator()["reg_number"], member_row(director)["reg_number"])
+
+    def test_coordinator_withdrawing_leaves_it_vacant_and_tells_the_director(self):
+        from app.models.pending_action import set_pending_action
+        director, coord = self._director(), student(name="Leaving Coord")
+        say_all(director, ["appoint the guides coordinator", "2", "1", self._pick_number(coord), "yes"])
+        set_pending_action(coord, "withdraw_data_consent")
+        H.say(coord, "YES")
+        self.assertIsNone(self._coordinator_reg())
+        self.assertIn("role is now vacant", H.sent_to(director)[-1])
+
+    def test_cancel_and_interruption(self):
+        director = self._director()
+        H.say(director, "appoint the guides coordinator")
+        self.assertIn("stopped that", H.say(director, "never mind"))
+        H.say(director, "appoint the guides coordinator")
+        self.assertIn("stopped choosing the Guides Coordinator", H.say(director, "Who is in my group?"))
+        self.assertIsNone(self._coordinator_reg())
+
+
 class BibleFollowUps(unittest.TestCase):
     """BUG-17: a context-only follow-up ('Explain verse 2') was answered with an unrelated passage."""
 
