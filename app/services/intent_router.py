@@ -86,6 +86,7 @@ from app.services import reporting
 from app.services import dashboard
 from app.services import withdrawal
 from app.services import conversation
+from app.services import announcements
 from app.services import study_guides
 from app.services.message_generator import display_name_for
 from app.services.group_query import answer_group_question
@@ -116,7 +117,7 @@ INTENT_DEFINITIONS = {
     "needs_support": "Message shows real distress or a serious personal struggle, even without explicitly asking for a human.",
     "leadership_query": "A leader or group leader asking for a report or data about how the CU or THEIR GROUP is doing -- attendance (including 'how is my group's attendance'), who's been missing, why people miss, escalation cases, what members have said in feedback (comments, questions, recommendations/suggestions, challenges they face), questions members asked the bot, membership numbers, event RSVPs, or evaluation numbers. A question about what MEMBERS have said, suggested or reported is this -- not a question about the constitution.",
     "reports_website": "A leader or group leader asking for the reports website / online reports / a login link to see reports or charts online (e.g. 'send me the reports link', 'can I see the reports online?', 'log me in').",
-    "send_announcement": "A leader wanting to broadcast a message to all members.",
+    "send_announcement": "A leader wanting to announce, tell, notify or remind members about something -- a notice, a change of venue or time, a reminder, or an upcoming event -- e.g. 'I want to announce to the members', 'tell everyone fellowship moved to Hall B', 'send a notice'. Use this rather than create_event unless they explicitly ask to create an event.",
     "allocate_groups": "A leader wanting to place new (ungrouped) members into Bible study groups.",
     "reshuffle_groups": "A leader wanting to fully regenerate every group from scratch, discarding existing placements.",
     "group_query": "A question about Bible study groups, group leaders, group membership, or who holds an exec office -- e.g. which group someone is in, who's in a group, how many groups exist, a summary of how allocation went, who leads a group, or who the chairperson/secretary/any exec member is. NOT attendance, who's been missing, or other report numbers -- those are leadership_query.",
@@ -841,6 +842,10 @@ def handle_message(whatsapp_id, message_text):
     # Answered without the AI (QA 2026-10-01): "help"/"menu" got "Sorry, I didn't
     # quite catch that", and "cancel"/"start over" with nothing in progress the same.
     if conversation.is_help_request(message_text):
+        if member["is_leader"]:
+            return conversation.HELP_TEXT + conversation.LEADER_HELP_TEXT
+        if member["leads_group_label"]:
+            return conversation.HELP_TEXT + conversation.GROUP_LEADER_HELP_TEXT
         return conversation.HELP_TEXT
     if conversation.is_cancel(message_text):
         return "There's nothing in progress to cancel -- you're all clear.\n\n" + conversation.HELP_TEXT
@@ -848,7 +853,7 @@ def handle_message(whatsapp_id, message_text):
 
     # Group leaders (not exec) may ask for reports -- about their OWN group
     # only; reporting.py scopes what each role can see.
-    group_leader_report = intent in ("leadership_query", "reports_website") and member["leads_group_label"]
+    group_leader_report = intent in ("leadership_query", "reports_website", "send_announcement") and member["leads_group_label"]
     if intent in LEADER_ONLY_INTENTS and not member["is_leader"] and not group_leader_report:
         # Don't confirm the feature exists to a non-leader -- just
         # fall back to the generic "can't help with that" response.
@@ -943,7 +948,7 @@ _STUB_HANDLERS = {
     "needs_support": _handle_needs_support,
     "leadership_query": lambda member, text: reporting.answer_leadership_question(member, text),
     "reports_website": lambda member, text: dashboard.link_reply(member),
-    "send_announcement": _handle_stub("Sending announcements"),
+    "send_announcement": lambda member, text: announcements.begin(member),
     "allocate_groups": _handle_allocate_groups,
     "reshuffle_groups": _handle_reshuffle_groups,
     "group_query": _handle_group_query,

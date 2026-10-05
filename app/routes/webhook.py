@@ -61,6 +61,7 @@ from app.services import exec_roles
 from app.services import member_questions
 from app.services import study_guides
 from app.services import conversation
+from app.services import announcements
 from app.models.study_guide import get_pending_guide_creation, get_pending_guide_purchase
 from app.services.whatsapp_client import send_whatsapp_message
 
@@ -321,6 +322,11 @@ def _route_after_confirmation(sender_number, message_text):
         return exec_roles.handle_message(sender_number, message_text)
     if get_pending_event_creation(sender_number) is not None:
         return event_manager.handle_create_event_message(sender_number, message_text)
+    if announcements.get_pending_announcement(sender_number) is not None:
+        # A leader part-way through an announcement -- expires after 30 minutes.
+        reply = announcements.handle_message(sender_number, message_text)
+        if reply is not None:
+            return reply
     if get_pending_guide_creation(sender_number) is not None:
         # An exec leader starting a new study guide -- expires after 30
         # minutes, then the message is routed normally (study_guides.py).
@@ -354,6 +360,7 @@ _NOTHING_CHANGED = "\n\n(I didn't go ahead with that earlier request -- just ask
 _STARTED_FLOW_TABLES = [
     "pending_leader_nominations", "pending_area_changes", "pending_reassignment_resolutions", "pending_exec_role",
     "pending_event_creation", "pending_rsvps", "pending_guide_creation", "pending_guide_purchase",
+    "pending_announcement",
 ]
 
 
@@ -402,6 +409,8 @@ def _structured_flows():
         (get_pending_exec_role, {"awaiting_area", "awaiting_office"}, delete_pending_exec_role,
          "recording exec roles", "update the exec roles"),
         (get_pending_area_change, None, delete_pending_area_change, "the area change", "change my area"),
+        (announcements.get_pending_announcement, {"awaiting_kind", "awaiting_audience", "awaiting_confirm"},
+         announcements.delete_pending_announcement, "the announcement", "send an announcement"),
         (get_pending_reassignment_resolution, None, delete_pending_reassignment_resolution,
          "the reassignments", "resolve reassignments"),
     ]

@@ -50,6 +50,7 @@ from app.models.attendance_marking import init_attendance_markings_table
 from app.models.member_question import init_member_question_tables
 from app.models.withdrawal import init_consent_withdrawals_table
 from app.models.study_guide import init_study_guide_tables
+from app.services.announcements import init_announcement_tables
 from app.services.withdrawal import finish_pending_withdrawals
 from app.services.guide_payments import check_unsettled_purchases
 from app.models.pending_message import forget_old_message_ids
@@ -116,6 +117,7 @@ def create_app():
     init_dashboard_login_table()
     init_consent_withdrawals_table()
     init_study_guide_tables()
+    init_announcement_tables()
 
     run_workers = _should_run_background_workers()
     if run_workers:

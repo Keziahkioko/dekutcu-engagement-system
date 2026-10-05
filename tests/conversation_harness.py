@@ -48,6 +48,7 @@ INTENT_RULES = [
     (r"\b(talk to (a )?(leader|human|person)|speak to someone)\b", "request_human"),
     (r"\bstart (a )?new study guide\b", "start_study_guide"),
     (r"\b(buy|purchase|pay for)\b.*\bguide\b", "purchase_study_guide"),
+    (r"\b(announce|announcement|send a notice|tell (all|every))", "send_announcement"),
     (r"\b(rsvp)\b", "event_rsvp"),
     (r"\b(create|add|announce) (an? )?(new )?event\b", "create_event"),
     (r"\b(what|which|any|upcoming).*\bevents?\b", "list_events"),
@@ -149,7 +150,7 @@ _SEND_MODULES = [
     "app.services.whatsapp_client", "app.routes.webhook", "app.services.area_change", "app.services.attendance",
     "app.services.escalation", "app.services.event_manager", "app.services.exec_roles", "app.services.fellowship_checkin",
     "app.services.intent_router", "app.services.leader_assignment", "app.services.member_questions",
-    "app.services.reporting", "app.services.study_guides", "app.services.withdrawal",
+    "app.services.reporting", "app.services.study_guides", "app.services.withdrawal", "app.services.announcements",
 ]
 _LLM_MODULES = [
     "app.services.escalation", "app.services.feedback", "app.services.feedback_themes", "app.services.group_query",
@@ -242,7 +243,7 @@ QA_PENDING_TABLES = [
     "pending_event_creation", "pending_exec_role", "pending_feedback", "pending_fellowship_checkin",
     "pending_leader_nominations", "pending_question_ask", "pending_reason_capture",
     "pending_reassignment_resolutions", "pending_registrations", "pending_rsvps", "pending_guide_creation",
-    "pending_guide_purchase", "conversation_history",
+    "pending_guide_purchase", "pending_announcement", "conversation_history",
 ]
 
 
@@ -258,7 +259,8 @@ def cleanup():
     """Removes this shard's TEST-QA members and anything keyed by its WhatsApp numbers."""
     like = WA_PREFIX + "%"
     for t in QA_PENDING_TABLES:
-        q(f"DELETE FROM {t} WHERE whatsapp_id LIKE %s", (like,), fetch=False)
+        if _table_exists(t):      # a brand-new table only exists once the app has started
+            q(f"DELETE FROM {t} WHERE whatsapp_id LIKE %s", (like,), fetch=False)
     regs = [r["reg_number"] for r in q("SELECT reg_number FROM members WHERE reg_number LIKE %s OR whatsapp_id LIKE %s",
                                        (REG_PREFIX + "%", like))]
     if regs:
@@ -269,6 +271,8 @@ def cleanup():
         q("DELETE FROM escalations WHERE case_id IN (SELECT id FROM escalation_cases WHERE reg_number = ANY(%s))", (regs,), fetch=False)
         q("DELETE FROM escalations WHERE reg_number = ANY(%s) OR notified_leader_reg_number = ANY(%s)", (regs, regs), fetch=False)
         q("DELETE FROM escalation_cases WHERE reg_number = ANY(%s)", (regs,), fetch=False)
+        if _table_exists("announcements"):
+            q("DELETE FROM announcements WHERE sent_by_reg_number = ANY(%s)", (regs,), fetch=False)
         q("DELETE FROM members WHERE reg_number = ANY(%s)", (regs,), fetch=False)
     q("DELETE FROM event_rsvps WHERE whatsapp_id LIKE %s", (like,), fetch=False)
     q("DELETE FROM event_rsvps WHERE event_id IN (SELECT id FROM events WHERE title LIKE %s)", (EVENT_PREFIX + "%",), fetch=False)

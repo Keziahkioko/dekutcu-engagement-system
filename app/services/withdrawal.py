@@ -51,7 +51,7 @@ _PENDING_TABLES = [
     "pending_event_creation", "pending_exec_role", "pending_feedback", "pending_fellowship_checkin",
     "pending_leader_nominations", "pending_question_ask", "pending_reason_capture",
     "pending_reassignment_resolutions", "pending_registrations", "pending_rsvps", "pending_guide_creation",
-    "pending_guide_purchase",
+    "pending_guide_purchase", "pending_announcement",
 ]
 
 
@@ -138,6 +138,7 @@ def anonymise(member):
         ("UPDATE guide_batches SET given_by_reg_number = %(t)s WHERE given_by_reg_number = %(r)s", None),
         ("UPDATE study_guides SET started_by_reg_number = %(t)s WHERE started_by_reg_number = %(r)s", None),
         ("DELETE FROM discipleship_team WHERE reg_number = %(r)s", None),
+        ("UPDATE announcements SET sent_by_reg_number = %(t)s WHERE sent_by_reg_number = %(r)s", None),
         ("UPDATE discipleship_team SET added_by_reg_number = %(t)s WHERE added_by_reg_number = %(r)s", None),
         ("DELETE FROM dashboard_login_codes WHERE reg_number = %(r)s", None),
         ("DELETE FROM pending_leader_nominations WHERE candidate_reg_number = %(r)s", None),

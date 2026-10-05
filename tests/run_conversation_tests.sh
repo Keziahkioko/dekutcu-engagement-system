@@ -11,6 +11,7 @@ TEST_SETS=(
   "EventCreation Registration"
   "FellowshipCheckin Webhook BibleFollowUps"
   "Fuzz"
+  "Announcements"
 )
 i=0; pids=()
 for g in "${TEST_SETS[@]}"; do

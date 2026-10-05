@@ -295,6 +295,95 @@ class UnpromptedAbsence(unittest.TestCase):
         self.assertTrue(pending("pending_escalation_consent", s), reply)
 
 
+class _Immediate:
+    """Stands in for threading.Thread so the background send runs before the test checks results."""
+    def __init__(self, target=None, args=(), daemon=None):
+        self.target, self.args = target, args
+
+    def start(self):
+        self.target(*self.args)
+
+
+class Announcements(unittest.TestCase):
+    """Leaders say 'announce' -- it used to reach a placeholder while the working feature was 'create an event'."""
+
+    def setUp(self):
+        self.patcher = patch("app.services.announcements.threading.Thread", _Immediate)
+        self.patcher.start()
+
+    def tearDown(self):
+        self.patcher.stop()
+
+    def test_exec_leader_announces_to_one_area(self):
+        leader = student(name="Ann Leader", leader=True)
+        bomas = [student(name="Bomas Member") for _ in range(2)]          # add_member puts everyone in Bomas
+        self.assertIn("Something happening on a date", H.say(leader, "I want to announce to the members"))
+        self.assertIn("Who should get it?", H.say(leader, "2"))
+        self.assertIn("members in Bomas", H.say(leader, "2"))             # option 2 = the first area, Bomas
+        preview = H.say(leader, "Fellowship has moved to Hall B tonight")
+        self.assertIn("Fellowship has moved to Hall B tonight", preview)
+        self.assertIn("-- Ann", preview, "announcements are signed")
+        before = len(H.outbox)
+        self.assertIn("Sending it now", H.say(leader, "yes"))
+        sent = H.outbox[before:]
+        receivers = {to for to, text in sent if "DeKUTCU announcement" in (text or "")}
+        self.assertTrue(set(bomas) <= receivers)
+        self.assertNotIn(leader, receivers, "the sender doesn't get their own announcement")
+        areas = {r["area"] for r in q("SELECT area FROM members WHERE whatsapp_id = ANY(%s)", (list(receivers),))}
+        self.assertEqual(areas, {"Bomas"}, "only the chosen area")
+        self.assertIn(f"went out to {len(receivers)} members", H.sent_to(leader)[-1])
+        rows = q("SELECT recipients, audience FROM announcements WHERE sent_by_reg_number = %s", (member_row(leader)["reg_number"],))
+        self.assertEqual((rows[0]["recipients"], rows[0]["audience"]), (len(receivers), "area:Bomas"))
+
+    def test_on_a_date_goes_to_event_creation(self):
+        leader = student(name="Ann Leader", leader=True)
+        H.say(leader, "send a notice")
+        self.assertIn("Let's create an event", H.say(leader, "1"))
+        self.assertTrue(pending("pending_event_creation", leader))
+        H.say(leader, "cancel")
+
+    def test_group_leader_announces_to_own_group_only(self):
+        gl = student(name="Group Lead", leads="QA-ANN-G")
+        members = [student(group="QA-ANN-G") for _ in range(2)]
+        outsider = student(group="QA-OTHER-G")
+        self.assertIn("your group (QA-ANN-G)", H.say(gl, "I want to announce something"))
+        self.assertIn("Send this to 2 members", H.say(gl, "Bring your Bibles on Tuesday"))
+        before = len(H.outbox)
+        H.say(gl, "YES")
+        receivers = {to for to, text in H.outbox[before:] if "DeKUTCU announcement" in (text or "")}
+        self.assertEqual(receivers, set(members))
+        self.assertNotIn(outsider, receivers)
+
+    def test_regular_member_cannot_announce(self):
+        s = student()
+        self.assertIn("didn't quite catch that", H.say(s, "I want to announce something"))
+        self.assertFalse(pending("pending_announcement", s))
+
+    def test_no_cancel_and_interruptions(self):
+        leader = student(name="Ann Leader", leader=True)
+        say_all(leader, ["I want to announce", "2", "1", "Test message"])
+        before = len(H.outbox)
+        self.assertIn("nothing was sent", H.say(leader, "no"))
+        self.assertEqual(len(H.outbox), before)
+        say_all(leader, ["I want to announce", "2"])
+        self.assertIn("stopped the announcement", H.say(leader, "How is attendance this month?"))
+        say_all(leader, ["I want to announce"])
+        self.assertIn("stopped that", H.say(leader, "never mind"))
+        self.assertFalse(pending("pending_announcement", leader))
+
+    def test_message_step_accepts_sentences_and_limits_length(self):
+        leader = student(name="Ann Leader", leader=True)
+        say_all(leader, ["I want to announce", "2", "1"])
+        self.assertIn("under 1000 characters", H.say(leader, "x" * 1200))
+        self.assertIn("Here's how it will look", H.say(leader, "What a blessed week! Who is coming to the hike on Saturday?"))
+        H.say(leader, "no")
+
+    def test_leader_help_lists_leader_features(self):
+        leader = student(name="Ann Leader", leader=True)
+        self.assertIn("As a leader, you can also", H.say(leader, "help"))
+        self.assertNotIn("As a leader", H.say(student(), "help"))
+
+
 class BibleFollowUps(unittest.TestCase):
     """BUG-17: a context-only follow-up ('Explain verse 2') was answered with an unrelated passage."""
 
