@@ -612,6 +612,11 @@ class _GuideState(_CoordinatorState):
     def setUp(self):
         super().setUp()
         from app.models.study_guide import start_new_guide
+        # A run cut off mid-test (the laptop's internet dropping) can leave a QA guide behind as the current one;
+        # clear any first, so it isn't "saved" as the real current guide and put back afterwards.
+        for t in ("guide_purchases", "guide_batches"):
+            q(f"DELETE FROM {t} WHERE guide_id IN (SELECT id FROM study_guides WHERE title = 'QA Romans')", fetch=False)
+        q("DELETE FROM study_guides WHERE title = 'QA Romans'", fetch=False)
         self.saved_guide = q("SELECT id FROM study_guides WHERE is_current")
         q("UPDATE study_guides SET is_current = FALSE WHERE is_current", fetch=False)
         self.guide, _ = start_new_guide("QA Romans", 70, None, now_utc().isoformat())
@@ -774,6 +779,21 @@ class GuideHandover(_GuideState):
         self.assertIn("enjoy", H.say(m, "Yes"))
         rows = q("SELECT receipt_status FROM guide_purchases WHERE reg_number = %s", (member_row(m)["reg_number"],))
         self.assertEqual(rows[0]["receipt_status"], "confirmed")
+
+    def test_natural_answers_count_but_a_complaint_does_not(self):
+        """The real model sent "I received my guide, thanks" to feedback -- a natural answer must count."""
+        self._stock(3)
+        a, b, c = self._group_member("Ann Member"), self._group_member("Ben Member"), self._group_member("Cal Member")
+        for m in (a, b, c):
+            self._pay(m)
+        say_all(self.leader, ["hand over guides", "1, 2, 3"])
+        self.assertIn("enjoy", H.say(a, "I received my guide, thanks"))
+        self.assertIn("back on the list", H.say(b, "sijapata"))
+        H.say(c, "I received it but some pages are missing")
+        status = {r["reg_number"]: r["receipt_status"] for r in q(
+            "SELECT reg_number, receipt_status FROM guide_purchases WHERE guide_id = %s", (self.guide["id"],))}
+        self.assertEqual([status[member_row(m)["reg_number"]] for m in (a, b, c)], ["confirmed", "disputed", "awaiting"],
+                         "a 'but...' complaint is left for the AI, not filed as a confirmation")
 
     def test_unanswered_stays_unconfirmed_and_shows_in_stock_view(self):
         self._stock(2)

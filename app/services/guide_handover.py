@@ -20,6 +20,9 @@ Hand-over (Keziah's choice over a collection code):
      NOT blocking (agreed with Keziah): an unrelated message is answered
      normally with a one-time reminder line; YES/NO counts whenever it comes.
      A blocked member's crisis message would never reach the safety check.
+     Natural answers count too (Keziah, 2026-10-05, after the real-model
+     check sent "I received my guide, thanks" to feedback): "I got it",
+     "nimepata", "not yet", "sijapata"... -- see _receipt_answer.
 
 Stock view ("guide stock"): for the Coordinator, the Director and exec
 leaders -- per group leader: confirmed copies received, handed over, in hand,
@@ -183,12 +186,42 @@ def _awaiting(reg_number):
               (reg_number,), one=True)
 
 
+# "Not received" is checked FIRST, so "I haven't received it" never reads as a yes.
+_NOT_RECEIVED = re.compile(
+    r"\b(not (yet|received|got)|haven'?t (yet |got|gotten|received|collected)|have not (yet |got|gotten|received|collected)|"
+    r"didn'?t (get|receive)|did not (get|receive)|never (got|received)|no(t)? one gave|sijapata|sijaipata|"
+    r"sikupata|bado)\b")
+_RECEIVED = re.compile(
+    r"\b(received|got (it|mine|my|the)|i have (it|mine|my|the)|i've got|collected (it|mine|my)|picked (it )?up|"
+    r"nimepata|nimeipata|nimeshapata|nimereceive)\b")
+_BUT = re.compile(r"\b(but|however|though|ila|lakini)\b")
+
+
+def _receipt_answer(text):
+    """
+    'yes' / 'no' / None for the "did you receive it?" question: a plain YES/NO, or a short, clear
+    sentence ("I got it, thanks", "nimepata", "not yet", "sijapata"). A question, a long message, or
+    one with a "but" (likely a complaint) is NOT taken as an answer -- it goes on to the AI as usual.
+    """
+    plain = conversation.strict_yes_no(text)
+    if plain:
+        return plain
+    n = conversation.normalise(text).replace("’", "'")   # iPhones type a curly apostrophe
+    if not n or "?" in (text or "") or len(n.split()) > 10 or _BUT.search(n):
+        return None
+    if _NOT_RECEIVED.search(n):
+        return "no"
+    if _RECEIVED.search(n):
+        return "yes"
+    return None
+
+
 def handle_receipt_answer(whatsapp_id, message_text):
     """A YES/NO from a member who has a hand-over to confirm. Returns the reply, or None if not applicable."""
     member = get_member_by_whatsapp_id(whatsapp_id)
     if not member:
         return None
-    answer = conversation.strict_yes_no(message_text)
+    answer = _receipt_answer(message_text)
     if answer is None:
         return None
     purchase = _awaiting(member["reg_number"])
