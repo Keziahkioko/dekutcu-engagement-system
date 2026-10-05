@@ -49,6 +49,9 @@ INTENT_RULES = [
     (r"\bstart (a )?new study guide\b", "start_study_guide"),
     (r"\b(buy|purchase|pay for)\b.*\bguide\b", "purchase_study_guide"),
     (r"\b(guides? coordinator|in charge of the guides|handle the guides)\b", "appoint_guides_coordinator"),
+    (r"\b(give guides|record a batch|gave .* copies)\b", "give_guide_batch"),
+    (r"\b(hand over guides|who needs guides)\b", "hand_over_guides"),
+    (r"\bguide stock\b", "guide_stock"),
     (r"\b(changing my number|change my number|new (whatsapp )?number|new line)\b", "change_number"),
     (r"\b(announce|announcement|send a notice|tell (all|every))", "send_announcement"),
     (r"\b(rsvp)\b", "event_rsvp"),
@@ -153,7 +156,8 @@ _SEND_MODULES = [
     "app.services.escalation", "app.services.event_manager", "app.services.exec_roles", "app.services.fellowship_checkin",
     "app.services.intent_router", "app.services.leader_assignment", "app.services.member_questions",
     "app.services.reporting", "app.services.study_guides", "app.services.withdrawal", "app.services.announcements",
-    "app.services.number_change", "app.services.guide_coordinator",
+    "app.services.number_change", "app.services.guide_coordinator", "app.services.guide_batches",
+    "app.services.guide_handover",
 ]
 _LLM_MODULES = [
     "app.services.escalation", "app.services.feedback", "app.services.feedback_themes", "app.services.group_query",
@@ -250,7 +254,7 @@ QA_PENDING_TABLES = [
     "pending_event_creation", "pending_exec_role", "pending_feedback", "pending_fellowship_checkin",
     "pending_leader_nominations", "pending_question_ask", "pending_reason_capture",
     "pending_reassignment_resolutions", "pending_registrations", "pending_rsvps", "pending_guide_creation",
-    "pending_guide_purchase", "pending_announcement", "pending_coordinator_choice", "conversation_history",
+    "pending_guide_purchase", "pending_announcement", "pending_coordinator_choice", "pending_batch", "pending_handover", "conversation_history",
 ]
 
 

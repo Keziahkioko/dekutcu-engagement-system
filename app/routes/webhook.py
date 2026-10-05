@@ -64,6 +64,8 @@ from app.services import conversation
 from app.services import announcements
 from app.services import number_change
 from app.services import guide_coordinator
+from app.services import guide_batches
+from app.services import guide_handover
 from app.models.study_guide import get_pending_guide_creation, get_pending_guide_purchase
 from app.services.whatsapp_client import send_whatsapp_message
 
@@ -295,6 +297,11 @@ def route_incoming_message(sender_number, message_text):
             reply = number_change.handle_decision(sender_number, message_text)
             if reply is not None:
                 return reply
+        # A group leader confirming a batch of guides ("RECEIVED 10") -- any time.
+        if guide_batches.is_received_message(message_text):
+            reply = guide_batches.handle_received(sender_number, message_text)
+            if reply is not None:
+                return reply
         # The member was asked for their NEW number ("I'm changing my number").
         if number_change.get_asking(sender_number) is not None:
             reply = number_change.handle_new_number_reply(sender_number, message_text)
@@ -344,6 +351,16 @@ def _route_after_confirmation(sender_number, message_text):
         return exec_roles.handle_message(sender_number, message_text)
     if get_pending_event_creation(sender_number) is not None:
         return event_manager.handle_create_event_message(sender_number, message_text)
+    if guide_handover.get_pending(sender_number) is not None:
+        # A leader picking who they gave guides to -- anything else is handled normally.
+        reply = guide_handover.handle_message(sender_number, message_text)
+        if reply is not None:
+            return reply
+    if guide_batches.get_pending(sender_number) is not None:
+        # The Guides Coordinator recording a batch for a group leader -- expires after 30 minutes.
+        reply = guide_batches.handle_message(sender_number, message_text)
+        if reply is not None:
+            return reply
     if guide_coordinator.get_pending(sender_number) is not None:
         # The Director appointing / changing the Guides Coordinator -- expires after 30 minutes.
         reply = guide_coordinator.handle_message(sender_number, message_text)
@@ -387,7 +404,7 @@ _NOTHING_CHANGED = "\n\n(I didn't go ahead with that earlier request -- just ask
 _STARTED_FLOW_TABLES = [
     "pending_leader_nominations", "pending_area_changes", "pending_reassignment_resolutions", "pending_exec_role",
     "pending_event_creation", "pending_rsvps", "pending_guide_creation", "pending_guide_purchase",
-    "pending_announcement", "pending_coordinator_choice",
+    "pending_announcement", "pending_coordinator_choice", "pending_batch", "pending_handover",
 ]
 
 
@@ -441,6 +458,8 @@ def _structured_flows():
          announcements.delete_pending_announcement, "the announcement", "send an announcement"),
         (guide_coordinator.get_pending, None, guide_coordinator.delete_pending,
          "choosing the Guides Coordinator", "appoint the guides coordinator"),
+        (guide_batches.get_pending, None, guide_batches.delete_pending,
+         "recording the batch", "give guides to a leader"),
         (get_pending_reassignment_resolution, None, delete_pending_reassignment_resolution,
          "the reassignments", "resolve reassignments"),
     ]
@@ -494,7 +513,12 @@ def _route_remaining(sender_number, message_text):
         reply = member_questions.handle_ask_reply(sender_number, message_text)
         if reply is not None:
             return reply
-    return handle_intent_message(sender_number, message_text)
+    # "Did you receive your copy from Jane? YES/NO" -- non-blocking: a YES/NO answers it whenever
+    # it comes; anything else is handled normally, with a one-time reminder line.
+    reply = guide_handover.handle_receipt_answer(sender_number, message_text)
+    if reply is not None:
+        return reply
+    return handle_intent_message(sender_number, message_text) + guide_handover.reminder_for(sender_number)
 
 
 def _handle_global_stop(sender_number):

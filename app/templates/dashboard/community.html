@@ -50,6 +50,41 @@
   </table></div>
   {% else %}<div class="empty">No upcoming events.</div>{% endif %}
 </div>
+
+<div class="panel">
+  <h2>Study guides</h2>
+  {% if guides %}
+  <div class="table-wrap"><table>
+    <tr><th>Guide</th><th>Price</th><th>Paid</th><th>Money received</th><th>Handed out</th>
+        <th>Confirmed by member</th><th>Waiting to collect</th><th>Refunds needed</th></tr>
+    {% for g in guides %}
+    <tr><td>{{ g.guide }}{% if g.on_sale %} <span class="note">(on sale)</span>{% endif %}</td>
+        <td>KES {{ g.price_kes }}</td><td>{{ g.paid }}</td><td>KES {{ "{:,}".format(g.money_received_kes) }}</td>
+        <td>{{ g.handed_out }}</td><td>{{ g.receipt_confirmed_by_member }}</td><td>{{ g.paid_waiting_to_collect }}</td>
+        <td class="{{ 'warn' if g.refunds_needed }}">{{ g.refunds_needed | length }}</td></tr>
+    {% endfor %}
+  </table></div>
+  {% for g in guides if g.refunds_needed %}
+  <p class="note"><strong>Refunds needed for '{{ g.guide }}'</strong> (paid twice):
+    {% for r in g.refunds_needed %}{{ r.member }} -- KES {{ r.amount_kes }}{% if r.mpesa_code %} (M-Pesa {{ r.mpesa_code }}){% endif %}{% if not loop.last %}; {% endif %}{% endfor %}</p>
+  {% endfor %}
+  {% for g in guides if g.on_sale %}
+  <h3 style="font-size:15px;margin:14px 0 6px">'{{ g.guide }}' -- copies per group</h3>
+  {% if g.stock_per_group %}
+  <div class="table-wrap"><table>
+    <tr><th>Group</th><th>Leader</th><th>Received</th><th>Handed out</th><th>In hand</th><th>Waiting</th><th>Unconfirmed</th></tr>
+    {% for r in g.stock_per_group %}
+    <tr><td>{{ r.group }}</td><td>{{ r.leader }}</td><td>{{ r.received }}</td><td>{{ r.handed_out }}</td>
+        <td class="{{ 'warn' if r.needs_more }}">{{ r.in_hand }}{% if r.needs_more %} -- needs more{% endif %}</td>
+        <td>{{ r.waiting }}</td>
+        <td>{% if r.unconfirmed_batches %}{{ r.unconfirmed_batches }} batch(es){% endif %}{% if r.unconfirmed_batches and r.unconfirmed_handovers %}, {% endif %}{% if r.unconfirmed_handovers %}{{ r.unconfirmed_handovers }} hand-over(s){% endif %}</td></tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<div class="empty">No batches or payments for this guide yet.</div>{% endif %}
+  {% if g.waiting_without_group_leader %}<p class="note">{{ g.waiting_without_group_leader }} paid member(s) with no group leader collect from the Guides Coordinator.</p>{% endif %}
+  {% endfor %}
+  {% else %}<div class="empty">No study guide has been started yet.</div>{% endif %}
+</div>
 {% endblock %}
 
 {% block scripts %}

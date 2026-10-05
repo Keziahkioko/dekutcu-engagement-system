@@ -13,7 +13,9 @@ TEST_SETS=(
   "Fuzz"
   "Announcements"
   "NumberChange"
-  "GuidesCoordinator"
+  # One set, run in order: the current study guide and the Guides Coordinator are single,
+  # database-wide positions, so these classes must never run side by side.
+  "GuidesCoordinator GuideBatches GuidePaymentNotices GuideHandover GuideReports"
 )
 i=0; pids=()
 for g in "${TEST_SETS[@]}"; do

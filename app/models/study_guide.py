@@ -17,12 +17,15 @@ Keziah 2026-09-30 -- see PROJECT_LOG.md).
                     repeated Safaricom callback can't double-count.
                     collected_at/collected_by: the hand-over, confirmed by
                     the leader who gave them their copy.
-  guide_batches     Printed copies the Discipleship team gives a group
+  guide_batches     Printed copies the Guides Coordinator gives a group
                     leader (a batch in advance, top-ups when it runs out).
-                    A leader's copies in hand = batches received - the
-                    hand-overs they've confirmed.
-  discipleship_team Subcommittee members the Discipleship Ministry Director
-                    has added -- they, with the Director, record batches.
+                    Two-sided because the guides are physical: a batch is
+                    'pending' until the leader replies RECEIVED (with the
+                    number they actually got); only confirmed copies count.
+                    A leader's copies in hand = confirmed copies received -
+                    the guides they've handed over to members.
+  discipleship_team NO LONGER USED -- from the superseded subcommittee design
+                    (replaced by one Guides Coordinator, 2026-10-05).
   pending_guide_creation  An exec leader part-way through "start a new
                     study guide".
   pending_guide_purchase  A member who's been asked which number to send the
@@ -90,6 +93,18 @@ def init_study_guide_tables():
             given_at TIMESTAMP NOT NULL
         )
     """)
+    # Step 4 part 4 (2026-10-05): the member confirms they received their copy. receipt_status:
+    # NULL (not handed over), 'awaiting' (handed over, member not yet answered -- "unconfirmed"),
+    # 'confirmed', or 'disputed' (the member said NO: the hand-over was reversed).
+    cursor.execute("ALTER TABLE guide_purchases ADD COLUMN IF NOT EXISTS receipt_status TEXT")
+    cursor.execute("ALTER TABLE guide_purchases ADD COLUMN IF NOT EXISTS receipt_answered_at TIMESTAMP")
+    cursor.execute("ALTER TABLE guide_purchases ADD COLUMN IF NOT EXISTS receipt_reminded BOOLEAN NOT NULL DEFAULT FALSE")
+    # Step 4 part 2 (2026-10-05): the leader confirms receipt -- physical copies.
+    cursor.execute("ALTER TABLE guide_batches ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'")
+    cursor.execute("ALTER TABLE guide_batches ADD COLUMN IF NOT EXISTS copies_received INTEGER")
+    cursor.execute("ALTER TABLE guide_batches ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMP")
+    cursor.execute("ALTER TABLE guide_batches ADD COLUMN IF NOT EXISTS reminded_at TIMESTAMP")
+    cursor.execute("ALTER TABLE guide_batches ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMP")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS discipleship_team (
             reg_number TEXT PRIMARY KEY,
@@ -298,6 +313,17 @@ def start_pending_guide_purchase(whatsapp_id, guide_id, at):
 
 def delete_pending_guide_purchase(whatsapp_id):
     _one("DELETE FROM pending_guide_purchase WHERE whatsapp_id = %s", (whatsapp_id,))
+
+
+def copies_in_hand(leader_reg_number, guide_id):
+    """Confirmed copies this leader has received for the guide, minus the ones they've handed to members."""
+    received = _one("""SELECT COALESCE(SUM(copies_received), 0) AS n FROM guide_batches
+                       WHERE leader_reg_number = %s AND guide_id = %s AND status = 'confirmed'""",
+                    (leader_reg_number, guide_id))["n"]
+    handed = _one("""SELECT COUNT(*) AS n FROM guide_purchases
+                     WHERE collected_by_reg_number = %s AND guide_id = %s AND collected_at IS NOT NULL""",
+                  (leader_reg_number, guide_id))["n"]
+    return int(received) - int(handed)
 
 
 def get_group_leader(group_label):

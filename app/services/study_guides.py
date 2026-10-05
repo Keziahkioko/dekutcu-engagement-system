@@ -17,15 +17,16 @@ stops it at any step.
 import re
 from datetime import datetime, timezone, timedelta
 
-from app.models.member import get_member_by_whatsapp_id, get_member_by_reg_number, get_exec_office_holders
+from app.models.member import get_member_by_whatsapp_id, get_member_by_reg_number
 from app.models.study_guide import (
     DEFAULT_PRICE_KES, get_current_guide, start_new_guide, count_paid_uncollected,
     get_pending_guide_creation, start_pending_guide_creation, update_pending_guide_creation,
     delete_pending_guide_creation,
     get_guide, get_group_leader, get_paid_purchase, get_recent_pending_purchase,
     get_pending_guide_purchase, start_pending_guide_purchase, delete_pending_guide_purchase,
+    copies_in_hand,
 )
-from app.services import mpesa, guide_payments
+from app.services import mpesa, guide_payments, guide_coordinator
 from app.services.whatsapp_client import send_whatsapp_message
 
 CONVERSATION_LIFETIME = timedelta(minutes=30)
@@ -128,7 +129,6 @@ def handle_start_guide_message(whatsapp_id, message_text):
 
 PROMPT_GUARD = timedelta(minutes=3)          # no second prompt while one may still be on their phone
 PHONE_QUESTION_LIFETIME = timedelta(minutes=15)
-DIRECTOR_OFFICE = "Discipleship Ministry Director"
 
 
 def _display_phone(phone):
@@ -139,18 +139,69 @@ def _display_phone(phone):
 
 def find_collector(member):
     """
-    Who this member collects their printed copy from (Keziah's collection chain): their group
-    leader; otherwise the Discipleship Ministry Director; otherwise the Discipleship team.
-    Returns (leader_row_or_None, how to describe them). NAME only -- a leader's personal
-    number is never given to members.
+    Who this member collects their printed copy from (Keziah's collection chain, revised
+    2026-10-05): their group leader; otherwise the Guides Coordinator (the Director while that
+    role is vacant); otherwise the Discipleship team. Returns (leader_row_or_None, how to
+    describe them). NAME only -- a leader's personal number is never given to members.
     """
     leader = get_group_leader(member["group_label"])
     if leader and leader["reg_number"] != member["reg_number"]:
         return leader, f"{leader['name']}, your group leader"
-    director = get_exec_office_holders().get(DIRECTOR_OFFICE)
-    if director and director["reg_number"] != member["reg_number"]:
-        return director, f"{director['name']}, the Discipleship Ministry Director"
+    coordinator = guide_coordinator.get_effective_coordinator()
+    if coordinator and coordinator["reg_number"] != member["reg_number"]:
+        role = ("the Guides Coordinator" if guide_coordinator.get_appointed_coordinator()
+                else "the Discipleship Ministry Director")
+        return coordinator, f"{coordinator['name']}, {role}"
     return None, "the Discipleship team"
+
+
+def waiting_for_leader(leader, guide_id):
+    """Paid, not-yet-collected purchases of this guide by members of this leader's group."""
+    return _waiting_count(leader["leads_group_label"], guide_id)
+
+
+def _waiting_count(group_label, guide_id):
+    from app.database import get_connection
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""SELECT COUNT(*) AS n FROM guide_purchases p JOIN members m ON m.reg_number = p.reg_number
+                      WHERE m.group_label = %s AND p.guide_id = %s AND p.status = 'paid' AND p.collected_at IS NULL""",
+                   (group_label, guide_id))
+    n = cursor.fetchone()["n"]
+    cursor.close()
+    conn.close()
+    return n
+
+
+def _notify_collector(member, purchase, guide):
+    """
+    Part 3 (2026-10-05): the person the member collects from is told about the payment. For a group
+    leader: copies in hand, and if there aren't enough for everyone who's paid, both the leader and the
+    Guides Coordinator are told so a top-up can come before anyone is left waiting.
+    """
+    collector, _ = find_collector(member)
+    if not collector or not collector["whatsapp_id"]:
+        return
+    code = f" (M-Pesa code {purchase['mpesa_receipt']})" if purchase["mpesa_receipt"] else ""
+    if not collector["leads_group_label"] or collector["leads_group_label"] != member["group_label"]:
+        send_whatsapp_message(collector["whatsapp_id"],
+                              f"{member['name']} has paid for '{guide['title']}'{code}. They don't have a group leader, "
+                              "so they'll collect their copy from you.")
+        return
+    in_hand = copies_in_hand(collector["reg_number"], guide["id"])
+    waiting = waiting_for_leader(collector, guide["id"])
+    text = (f"{member['name']} has paid for '{guide['title']}'{code} and will collect their copy from you. "
+            f"You have {in_hand} {'copy' if in_hand == 1 else 'copies'} in hand and {waiting} paid "
+            f"{'member' if waiting == 1 else 'members'} waiting.")
+    if waiting > in_hand:
+        coordinator = guide_coordinator.get_effective_coordinator()
+        name = coordinator["name"] if coordinator else "the Guides Coordinator"
+        text += f"\n\nThat's not enough copies for everyone -- ask {name} for more."
+        if coordinator and coordinator["whatsapp_id"] and coordinator["reg_number"] != collector["reg_number"]:
+            send_whatsapp_message(coordinator["whatsapp_id"],
+                                  f"{collector['name']} ({collector['leads_group_label']}) has run out of '{guide['title']}': "
+                                  f"{waiting} paid {'member' if waiting == 1 else 'members'} waiting, {in_hand} in hand.")
+    send_whatsapp_message(collector["whatsapp_id"], text)
 
 
 def begin_purchase(member):
@@ -245,6 +296,10 @@ def notify_purchase_result(purchase):
                 else "Your M-Pesa confirmation SMS has the transaction code.")
         text = (f"Payment received ✅ -- '{guide['title']}', KES {purchase['amount_kes']}. {code}\n\n"
                 f"Collect your copy from {collector}.")
+        try:
+            _notify_collector(member, purchase, guide)
+        except Exception as e:
+            print(f"Couldn't notify the collector about purchase {purchase['id']}: {e}")
     elif purchase["status"] == "duplicate":
         code = f" (code {purchase['mpesa_receipt']})" if purchase["mpesa_receipt"] else ""
         text = (f"It looks like you paid twice for '{guide['title']}'. You already have a paid copy, so this "

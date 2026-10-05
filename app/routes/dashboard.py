@@ -168,6 +168,7 @@ def community(member):
         membership=reporting.membership_summary(days),
         registrations_weekly=dashboard.registrations_weekly(days),
         events=reporting.event_rsvps()["upcoming_events"],
+        guides=reporting.study_guide_summary()["study_guides"],
     )
 
 

@@ -89,6 +89,8 @@ from app.services import conversation
 from app.services import announcements
 from app.services import number_change
 from app.services import guide_coordinator
+from app.services import guide_batches
+from app.services import guide_handover
 from app.services import study_guides
 from app.services.message_generator import display_name_for
 from app.services.group_query import answer_group_question
@@ -110,6 +112,9 @@ INTENT_DEFINITIONS = {
     "feedback_response": "Giving feedback, praise, a complaint or comments about a past session or event (e.g. 'worship last Friday was amazing', 'Bible study was too long') -- even if it sounds like chit-chat.",
     "purchase_study_guide": "Wanting to buy or pay for a Bible Study guide, or asking about their own study-guide purchase (whether they've paid, where to collect it).",
     "start_study_guide": "A leader or the Guides Coordinator wanting to START or set up a NEW semester's study guide for sale (its title and price) -- not someone wanting to buy one.",
+    "hand_over_guides": "A group leader (or the Guides Coordinator) wanting to record handing printed study guides to members who paid, or asking who still needs a guide (e.g. 'hand over guides', 'who needs guides?', 'I gave Mary her guide').",
+    "guide_stock": "The Guides Coordinator or an exec leader asking about study-guide stock -- copies with each group leader, how many handed out, who has run out (e.g. 'guide stock', 'how many guides does each leader have?').",
+    "give_guide_batch": "The Guides Coordinator wanting to record giving a batch of printed study guides to a group leader (e.g. 'give guides to a leader', 'I gave Jane 10 copies', 'record a batch').",
     "appoint_guides_coordinator": "The Discipleship Director (or an exec leader) wanting to appoint, change or remove the Guides Coordinator -- the person in charge of the printed study guides (e.g. 'appoint the guides coordinator', 'make Peter in charge of the guides', 'I'll handle the guides myself').",
     "update_details": "Wanting to change their own registered details (e.g. area, year of study, name) -- NOT their phone/WhatsApp number (that's change_number).",
     "change_number": "Wanting to move to, or tell the bot about, a NEW phone or WhatsApp number (e.g. 'I'm changing my number', 'I got a new line', 'my number is changing to 07...').",
@@ -141,7 +146,7 @@ LEADER_ONLY_INTENTS = {
     "leadership_query", "send_announcement", "allocate_groups", "reshuffle_groups",
     "nominate_group_leader", "view_group_leaders", "resolve_pending_leader", "remove_group_leader",
     "resolve_reassignments", "create_event", "send_checkin", "set_exec_roles", "reports_website",
-    "start_study_guide", "appoint_guides_coordinator",
+    "start_study_guide", "appoint_guides_coordinator", "give_guide_batch", "hand_over_guides", "guide_stock",
 }
 
 # Guards against two allocation runs (each ~10-15 seconds) overlapping
@@ -853,18 +858,20 @@ def handle_message(whatsapp_id, message_text):
     if conversation.is_help_request(message_text):
         if member["is_leader"]:
             return conversation.HELP_TEXT + conversation.LEADER_HELP_TEXT
-        if member["leads_group_label"]:
-            return conversation.HELP_TEXT + conversation.GROUP_LEADER_HELP_TEXT
-        return conversation.HELP_TEXT
+        extra = conversation.GROUP_LEADER_HELP_TEXT if member["leads_group_label"] else ""
+        if guide_coordinator.is_coordinator(member):
+            extra += conversation.COORDINATOR_HELP_TEXT
+        return conversation.HELP_TEXT + extra
     if conversation.is_cancel(message_text):
         return "There's nothing in progress to cancel -- you're all clear.\n\n" + conversation.HELP_TEXT
     intent = classify_intent(message_text, whatsapp_id)
 
     # Group leaders (not exec) may ask for reports -- about their OWN group
     # only; reporting.py scopes what each role can see.
-    group_leader_report = intent in ("leadership_query", "reports_website", "send_announcement") and member["leads_group_label"]
+    group_leader_report = intent in ("leadership_query", "reports_website", "send_announcement", "hand_over_guides") and member["leads_group_label"]
     # The Guides Coordinator may not otherwise be a leader, but runs the study guides.
-    coordinator_task = intent == "start_study_guide" and guide_coordinator.is_coordinator(member)
+    coordinator_task = (intent in ("start_study_guide", "give_guide_batch", "hand_over_guides", "guide_stock")
+                        and guide_coordinator.is_coordinator(member))
     if intent in LEADER_ONLY_INTENTS and not member["is_leader"] and not group_leader_report and not coordinator_task:
         # Don't confirm the feature exists to a non-leader -- just
         # fall back to the generic "can't help with that" response.
@@ -951,6 +958,9 @@ _STUB_HANDLERS = {
     "purchase_study_guide": lambda member, text: study_guides.begin_purchase(member),
     "start_study_guide": lambda member, text: study_guides.begin_start_guide(member),
     "appoint_guides_coordinator": lambda member, text: guide_coordinator.begin(member),
+    "give_guide_batch": lambda member, text: guide_batches.begin(member),
+    "hand_over_guides": lambda member, text: guide_handover.begin(member),
+    "guide_stock": lambda member, text: guide_handover.stock_view(member),
     "update_details": _handle_update_details,
     "change_number": lambda member, text: number_change.begin_change_number(member),
     "unsubscribe_followup": _handle_unsubscribe_followup,

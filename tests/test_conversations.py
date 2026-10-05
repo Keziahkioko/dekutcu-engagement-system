@@ -505,8 +505,8 @@ class NumberChange(unittest.TestCase):
         self.assertIn("already a request", H.say(other, owners[0][1]))
 
 
-class GuidesCoordinator(unittest.TestCase):
-    """Stage 14 step 4 part 1: one Guides Coordinator, appointed by the Discipleship Ministry Director."""
+class _CoordinatorState(unittest.TestCase):
+    """Shared set-up (no tests of its own): the Director's office and the Coordinator are single positions."""
 
     DIRECTOR = "Discipleship Ministry Director"
 
@@ -538,6 +538,10 @@ class GuidesCoordinator(unittest.TestCase):
         from app.models.member import get_members_by_area
         regs = [m["reg_number"] for m in get_members_by_area("Bomas")]
         return str(regs.index(member_row(wa)["reg_number"]) + 1)
+
+
+class GuidesCoordinator(_CoordinatorState):
+    """Stage 14 step 4 part 1: one Guides Coordinator, appointed by the Discipleship Ministry Director."""
 
     def test_director_appoints_someone_else_who_is_told(self):
         director, candidate = self._director(), student(name="Peter Coordinator")
@@ -600,6 +604,263 @@ class GuidesCoordinator(unittest.TestCase):
         H.say(director, "appoint the guides coordinator")
         self.assertIn("stopped choosing the Guides Coordinator", H.say(director, "Who is in my group?"))
         self.assertIsNone(self._coordinator_reg())
+
+
+class _GuideState(_CoordinatorState):
+    """Shared set-up (no tests): a fresh current guide, a Director, and a group leader with a group."""
+
+    def setUp(self):
+        super().setUp()
+        from app.models.study_guide import start_new_guide
+        self.saved_guide = q("SELECT id FROM study_guides WHERE is_current")
+        q("UPDATE study_guides SET is_current = FALSE WHERE is_current", fetch=False)
+        self.guide, _ = start_new_guide("QA Romans", 70, None, now_utc().isoformat())
+        self.director = self._director()
+        self.leader = student(name="Jane Leader", leads=f"QA-B-{SHARD}-{_counter[0]}")
+
+    def tearDown(self):
+        q("DELETE FROM guide_batches WHERE guide_id = %s", (self.guide["id"],), fetch=False)
+        q("DELETE FROM guide_purchases WHERE guide_id = %s", (self.guide["id"],), fetch=False)
+        q("DELETE FROM study_guides WHERE id = %s", (self.guide["id"],), fetch=False)
+        for r in self.saved_guide:
+            q("UPDATE study_guides SET is_current = TRUE, closed_at = NULL WHERE id = %s", (r["id"],), fetch=False)
+        super().tearDown()
+
+    def _leader_number(self):
+        rows = q("SELECT reg_number FROM members WHERE leads_group_label IS NOT NULL AND data_consent ORDER BY leads_group_label, name")
+        return str([r["reg_number"] for r in rows].index(member_row(self.leader)["reg_number"]) + 1)
+
+    def _batches(self):
+        return q("SELECT * FROM guide_batches WHERE guide_id = %s ORDER BY id", (self.guide["id"],))
+
+    def _give(self, giver, copies):
+        say_all(giver, ["give guides to a leader", self._leader_number(), str(copies)])
+        return H.say(giver, "yes")
+
+    def _stock(self, copies):
+        """Gives the leader a confirmed batch."""
+        self._give(self.director, copies)
+        H.say(self.leader, f"RECEIVED {copies}")
+
+    def _group_member(self, name="Paying Member"):
+        return student(name=name, group=member_row(self.leader)["leads_group_label"])
+
+    def _pay(self, wa):
+        """The member buys the current guide and Safaricom confirms it."""
+        from app.services import guide_payments
+        H.say(wa, "buy the guide")
+        H.say(wa, "yes")
+        cid = f"ws_CO_QA_{len(H.safaricom.pushes)}"
+        H.safaricom.results[cid] = 0
+        guide_payments.handle_callback({"Body": {"stkCallback": {"CheckoutRequestID": cid, "ResultCode": 0,
+            "CallbackMetadata": {"Item": [{"Name": "MpesaReceiptNumber", "Value": f"QA{SHARD}{cid[-4:]}"}]}}}})
+
+
+class GuideBatches(_GuideState):
+    """Stage 14 step 4 part 2: batches to group leaders, confirmed by the leader (physical copies)."""
+
+    def test_batch_is_pending_until_the_leader_confirms(self):
+        from app.models.study_guide import copies_in_hand
+        self.assertIn("waiting for them to confirm", self._give(self.director, 10))   # vacant role -> the Director acts
+        self.assertEqual(self._batches()[0]["status"], "pending")
+        self.assertIn("reply RECEIVED 10", H.sent_to(self.leader)[-1])
+        self.assertEqual(copies_in_hand(member_row(self.leader)["reg_number"], self.guide["id"]), 0, "unconfirmed copies don't count")
+        self.assertIn("You now have 10 in hand", H.say(self.leader, "RECEIVED 10"))
+        self.assertEqual(self._batches()[0]["status"], "confirmed")
+
+    def test_a_different_number_is_recorded_and_flagged(self):
+        self._give(self.director, 10)
+        self.assertIn("You now have 8 in hand", H.say(self.leader, "received 8"))
+        self.assertIn("received 8 copies", H.sent_to(self.director)[-1])
+        self.assertEqual(self._batches()[0]["copies_received"], 8)
+
+    def test_bare_received_confirms_the_oldest_batch_first(self):
+        self._give(self.director, 5)
+        self._give(self.director, 3)
+        self.assertIn("1 more batch to confirm", H.say(self.leader, "Received"))
+        self.assertEqual([b["status"] for b in self._batches()], ["confirmed", "pending"])
+        self.assertIn("You now have 8 in hand", H.say(self.leader, "RECEIVED 3"))
+
+    def test_appointed_coordinator_gives_batches_and_others_cannot(self):
+        coord = student(name="Batch Coord")
+        say_all(self.director, ["appoint the guides coordinator", "2", "1", self._pick_number(coord), "yes"])
+        self.assertIn("waiting for them to confirm", self._give(coord, 4))
+        self.assertIn("Only the Guides Coordinator", H.say(student(name="Other Exec", leader=True), "give guides to a leader"))
+        self.assertIn("didn't quite catch that", H.say(student(), "give guides to a leader"))
+
+    def test_reminder_then_coordinator_alert(self):
+        from app.services.guide_batches import check_unconfirmed_batches
+        self._give(self.director, 6)
+        q("UPDATE guide_batches SET given_at = given_at - INTERVAL '25 hours' WHERE guide_id = %s", (self.guide["id"],), fetch=False)
+        check_unconfirmed_batches()
+        self.assertIn("Reminder: did you receive the 6 copies", H.sent_to(self.leader)[-1])
+        q("UPDATE guide_batches SET given_at = given_at - INTERVAL '3 days' WHERE guide_id = %s", (self.guide["id"],), fetch=False)
+        check_unconfirmed_batches()
+        self.assertIn("still hasn't confirmed", H.sent_to(self.director)[-1])
+        before = len(H.outbox)
+        check_unconfirmed_batches()
+        self.assertEqual(len(H.outbox), before, "each reminder only once")
+
+    def test_received_with_nothing_waiting_is_handled_normally_and_bad_input(self):
+        self.assertNotIn("in hand", H.say(self.leader, "received"))
+        say_all(self.director, ["give guides to a leader"])
+        self.assertIn("Please reply with a number", H.say(self.director, "999"))
+        H.say(self.director, self._leader_number())
+        self.assertIn("between 1 and 500", H.say(self.director, "0"))
+        self.assertIn("stopped that", H.say(self.director, "cancel"))
+        self.assertEqual(self._batches(), [])
+
+
+class GuidePaymentNotices(_GuideState):
+    """Part 3: the collector is told about each payment; running out alerts the leader and the Coordinator."""
+
+    def test_leader_with_no_copies_is_told_and_the_coordinator_alerted(self):
+        member = self._group_member()
+        self._pay(member)
+        self.assertIn("Collect your copy from Jane Leader, your group leader", H.sent_to(member)[-1])
+        notice = H.sent_to(self.leader)[-1]
+        self.assertIn("Paying Member has paid", notice)
+        self.assertIn("0 copies in hand and 1 paid member waiting", notice)
+        self.assertIn("not enough copies", notice)
+        self.assertIn("has run out", H.sent_to(self.director)[-1])
+
+    def test_leader_with_stock_gets_a_plain_notice(self):
+        self._stock(5)
+        before = len(H.sent_to(self.director))
+        self._pay(self._group_member())
+        self.assertIn("5 copies in hand and 1 paid member waiting", H.sent_to(self.leader)[-1])
+        self.assertNotIn("not enough", H.sent_to(self.leader)[-1])
+        self.assertEqual(len(H.sent_to(self.director)), before, "no run-out alert while there's stock")
+
+    def test_member_without_a_group_leader_collects_from_the_coordinator(self):
+        coord = student(name="Pay Coord")
+        say_all(self.director, ["appoint the guides coordinator", "2", "1", self._pick_number(coord), "yes"])
+        member = student(name="Groupless Member")
+        self._pay(member)
+        self.assertIn("Pay Coord, the Guides Coordinator", H.sent_to(member)[-1])
+        self.assertIn("they'll collect their copy from you", H.sent_to(coord)[-1])
+
+
+class GuideHandover(_GuideState):
+    """Part 4: hand-over picked from a list, the member confirms (non-blocking), and the stock view."""
+
+    def test_hand_over_then_member_confirms_or_disputes(self):
+        from app.models.study_guide import copies_in_hand
+        self._stock(3)
+        a, b = self._group_member("Ann Member"), self._group_member("Ben Member")
+        self._pay(a)
+        self._pay(b)
+        listing = H.say(self.leader, "hand over guides")
+        self.assertIn("Ann Member -- 'QA Romans'", listing)
+        self.assertIn("Ben Member -- 'QA Romans'", listing)
+        self.assertIn("You have 1 copy of 'QA Romans' left", H.say(self.leader, "1, 2"))
+        self.assertIn("Did you receive it?", H.sent_to(a)[-1])
+        self.assertIn("enjoy", H.say(a, "yes"))
+        self.assertIn("back on the list", H.say(b, "no"))
+        self.assertIn("says they haven't received", H.sent_to(self.leader)[-1])
+        self.assertIn("says they haven't received", H.sent_to(self.director)[-1])
+        self.assertEqual(copies_in_hand(member_row(self.leader)["reg_number"], self.guide["id"]), 2, "the disputed copy is back")
+        self.assertIn("Ben Member", H.say(self.leader, "hand over guides"), "back on the waiting list")
+        H.say(self.leader, "cancel")
+
+    def test_confirmation_is_not_blocking_and_reminds_once(self):
+        self._stock(1)
+        m = self._group_member()
+        self._pay(m)
+        say_all(self.leader, ["hand over guides", "1"])
+        first = H.say(m, "What events are coming up?")
+        self.assertIn("did you receive your copy of 'QA Romans' from Jane Leader", first)
+        self.assertNotIn("did you receive", H.say(m, "What events are coming up?"), "reminded once only")
+        self.assertIn("enjoy", H.say(m, "Yes"))
+        rows = q("SELECT receipt_status FROM guide_purchases WHERE reg_number = %s", (member_row(m)["reg_number"],))
+        self.assertEqual(rows[0]["receipt_status"], "confirmed")
+
+    def test_unanswered_stays_unconfirmed_and_shows_in_stock_view(self):
+        self._stock(2)
+        m = self._group_member()
+        self._pay(m)
+        say_all(self.leader, ["hand over guides", "1"])
+        view = H.say(self.director, "guide stock")
+        self.assertIn("received 2, handed out 1, in hand 1, waiting 0", view)
+        self.assertIn("1 hand-over(s) not confirmed by the member", view)
+
+    def test_zero_stock_hand_over_is_recorded_with_a_note(self):
+        m = self._group_member()
+        self._pay(m)
+        reply = H.say(self.leader, "hand over guides") and H.say(self.leader, "1")
+        self.assertIn("Your records show 0 copies", reply)
+
+    def test_coordinator_hands_over_to_members_without_a_leader(self):
+        coord = student(name="Hand Coord")
+        say_all(self.director, ["appoint the guides coordinator", "2", "1", self._pick_number(coord), "yes"])
+        groupless = student(name="Loose Member")
+        self._pay(groupless)
+        self.assertIn("Loose Member", H.say(coord, "hand over guides"))
+        self.assertIn("Recorded -- Loose Member", H.say(coord, "1"))
+
+    def test_regular_members_cannot_hand_over_or_see_stock(self):
+        s = student()
+        self.assertIn("didn't quite catch that", H.say(s, "hand over guides"))
+        self.assertIn("didn't quite catch that", H.say(s, "guide stock"))
+
+    def test_nothing_waiting_and_bad_numbers(self):
+        self.assertIn("Nobody is waiting", H.say(self.leader, "hand over guides"))
+        self._pay(self._group_member())
+        H.say(self.leader, "hand over guides")
+        self.assertIn("numbers from 1 to 1", H.say(self.leader, "7"))
+        self.assertIn("stopped that", H.say(self.leader, "cancel"))
+
+
+class GuideReports(_GuideState):
+    """Stage 14 step 5: study-guide numbers in WhatsApp reports, the Sunday summary and the reports website."""
+
+    def _scenario(self):
+        self._stock(3)
+        a, b = self._group_member("Refund Member"), self._group_member("Waiting Member")
+        self._pay(a)
+        self._pay(b)
+        say_all(self.leader, ["hand over guides", "1"])          # list is alphabetical: Refund Member first
+        H.say(a, "yes")
+        q("""INSERT INTO guide_purchases (guide_id, reg_number, amount_kes, phone, status, mpesa_receipt, requested_at, paid_at)
+             VALUES (%s, %s, 70, %s, 'duplicate', %s, %s, %s)""",
+          (self.guide["id"], member_row(a)["reg_number"], a, f"QADUP{SHARD}{_counter[0]}", now_utc(), now_utc()), fetch=False)
+        return a, b
+
+    def test_summary_numbers_refunds_and_stock(self):
+        from app.services.reporting import study_guide_summary
+        self._scenario()
+        g = next(x for x in study_guide_summary()["study_guides"] if x["on_sale"])
+        self.assertEqual((g["paid"], g["money_received_kes"], g["handed_out"], g["receipt_confirmed_by_member"],
+                          g["paid_waiting_to_collect"]), (2, 210, 1, 1, 1))
+        self.assertEqual([r["member"] for r in g["refunds_needed"]], ["Refund Member"])
+        row = next(r for r in g["stock_per_group"] if r["leader"] == "Jane Leader")
+        self.assertEqual((row["received"], row["handed_out"], row["in_hand"], row["waiting"]), (3, 1, 2, 1))
+        self.assertNotIn("Waiting Member", str(study_guide_summary()), "names only where someone must act (refunds)")
+
+    def test_sunday_summary_line_and_leader_view(self):
+        from app.services.reporting import build_weekly_digest, my_group_guides
+        self._scenario()
+        self.assertIn("Study guide 'QA Romans': 2 paid (KES 210), 1 handed out, *1 refund(s) needed*", build_weekly_digest())
+        mine = my_group_guides(member_row(self.leader)["leads_group_label"])
+        self.assertEqual((mine["copies_in_hand"], mine["paid_waiting_to_collect"]), (2, ["Waiting Member"]))
+
+    def test_reports_website_section(self):
+        self._scenario()
+        saved_key = H.app.secret_key
+        H.app.secret_key = "qa-only-key"
+        try:
+            with patch.dict(os.environ, {"DASHBOARD_SECRET_KEY": "qa-only-key"}):
+                client = H.app.test_client()
+                with client.session_transaction() as s:
+                    s["reg_number"] = member_row(self.director)["reg_number"]
+                response = client.get("/dashboard/community")
+        finally:
+            H.app.secret_key = saved_key
+        self.assertEqual(response.status_code, 200)
+        page = response.get_data(as_text=True)
+        for text in ["Study guides", "QA Romans", "KES 210", "Refunds needed", "Refund Member", "copies per group",
+                     member_row(self.leader)["leads_group_label"]]:
+            self.assertIn(text, page)
 
 
 class BibleFollowUps(unittest.TestCase):

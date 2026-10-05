@@ -53,6 +53,8 @@ from app.models.study_guide import init_study_guide_tables
 from app.services.announcements import init_announcement_tables
 from app.services.number_change import init_number_change_table, check_number_changes
 from app.services.guide_coordinator import init_guide_coordinator_tables
+from app.services.guide_batches import init_batch_tables, check_unconfirmed_batches
+from app.services.guide_handover import init_handover_tables
 from app.services.withdrawal import finish_pending_withdrawals
 from app.services.guide_payments import check_unsettled_purchases
 from app.models.pending_message import forget_old_message_ids
@@ -122,6 +124,8 @@ def create_app():
     init_announcement_tables()
     init_number_change_table()
     init_guide_coordinator_tables()
+    init_batch_tables()
+    init_handover_tables()
 
     run_workers = _should_run_background_workers()
     if run_workers:
@@ -174,6 +178,8 @@ def create_app():
     register_every_check_task("forget_old_message_ids", forget_old_message_ids)
     # Number changes: an old number that doesn't answer within 24h -> a leader; expiries.
     register_every_check_task("check_number_changes", check_number_changes)
+    # Batches of guides a leader hasn't confirmed: reminder at 24h, Coordinator alerted at 3 days.
+    register_every_check_task("check_unconfirmed_batches", check_unconfirmed_batches)
 
     if run_workers:
         start_scheduler()

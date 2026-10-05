@@ -352,6 +352,57 @@ def evaluation_summary():
     }
 
 
+def study_guide_summary():
+    """
+    Stage 14 step 5: study guides -- the current guide and the two before it: sold, money received,
+    handed out, confirmed by members, still waiting, and refunds needed; plus per-group stock for the
+    current guide (the same rows as the Coordinator's "guide stock"). Names appear only where someone
+    has to act: a refund (a person must be paid back). Exec leaders only.
+    """
+    from app.services.guide_handover import stock_rows, waiting_without_leader
+    guides = _q("SELECT * FROM study_guides ORDER BY is_current DESC, started_at DESC LIMIT 3")
+    result = []
+    for g in guides:
+        t = _q("""SELECT COUNT(*) FILTER (WHERE status = 'paid') AS paid,
+                         COALESCE(SUM(amount_kes) FILTER (WHERE status IN ('paid', 'duplicate')), 0) AS money,
+                         COUNT(*) FILTER (WHERE status = 'paid' AND collected_at IS NOT NULL) AS handed_out,
+                         COUNT(*) FILTER (WHERE receipt_status = 'confirmed') AS confirmed,
+                         COUNT(*) FILTER (WHERE receipt_status = 'awaiting') AS unconfirmed,
+                         COUNT(*) FILTER (WHERE status = 'paid' AND collected_at IS NULL) AS waiting
+                  FROM guide_purchases WHERE guide_id = %s""", (g["id"],))[0]
+        refunds = _q("""SELECT m.name, p.mpesa_receipt, p.amount_kes, p.paid_at FROM guide_purchases p
+                        LEFT JOIN members m ON m.reg_number = p.reg_number
+                        WHERE p.guide_id = %s AND p.status = 'duplicate' ORDER BY p.paid_at""", (g["id"],))
+        entry = {
+            "guide": g["title"], "price_kes": g["price_kes"], "on_sale": g["is_current"],
+            "paid": t["paid"], "money_received_kes": int(t["money"]), "handed_out": t["handed_out"],
+            "receipt_confirmed_by_member": t["confirmed"], "handed_out_not_yet_confirmed": t["unconfirmed"],
+            "paid_waiting_to_collect": t["waiting"],
+            "refunds_needed": [{"member": r["name"] or "(withdrew)", "mpesa_code": r["mpesa_receipt"],
+                                "amount_kes": r["amount_kes"]} for r in refunds],
+        }
+        if g["is_current"]:
+            entry["stock_per_group"] = stock_rows(g["id"])
+            entry["waiting_without_group_leader"] = waiting_without_leader(g["id"])
+        result.append(entry)
+    return {"study_guides": result,
+            "note": "Money received includes payments recorded for refund; members' names appear only for refunds."}
+
+
+def my_group_guides(group_label):
+    """A group leader's own view of the current guide: copies in hand and members waiting."""
+    from app.models.study_guide import get_current_guide, copies_in_hand
+    guide = get_current_guide()
+    leader = _q("SELECT * FROM members WHERE leads_group_label = %s LIMIT 1", (group_label,))
+    if not guide or not leader:
+        return {"current_guide": None}
+    waiting = _q("""SELECT m.name FROM guide_purchases p JOIN members m ON m.reg_number = p.reg_number
+                    WHERE m.group_label = %s AND p.guide_id = %s AND p.status = 'paid' AND p.collected_at IS NULL
+                    ORDER BY m.name""", (group_label, guide["id"]))
+    return {"current_guide": guide["title"], "copies_in_hand": copies_in_hand(leader[0]["reg_number"], guide["id"]),
+            "paid_waiting_to_collect": [w["name"] for w in waiting]}
+
+
 # ---------------------------------------------------------------------
 # Tools offered to the model -- scoped by the ASKER's own role, never by
 # anything the model requests.
@@ -370,9 +421,10 @@ def _build_tools(member):
     tools, dispatch = [], {}
     if member.get("leads_group_label"):
         group = member["leads_group_label"]
-        tools.append(_tool("my_group_report", f"Attendance and lapsing members for the group you lead ({group}).", _DAYS_PROP))
+        tools.append(_tool("my_group_report", f"Attendance, lapsing members and study-guide copies for the group you lead ({group}).", _DAYS_PROP))
         dispatch["my_group_report"] = lambda days=30, **kw: {
-            "attendance": attendance_summary(days, group_label=group), "lapsing": lapsing_members(group_label=group)}
+            "attendance": attendance_summary(days, group_label=group), "lapsing": lapsing_members(group_label=group),
+            "study_guides": my_group_guides(group)}
     if member.get("is_leader"):
         tools += [
             _tool("attendance_summary", "Org-wide Bible Study attendance per group, groups with no marking, and fellowship check-ins.", _DAYS_PROP),
@@ -387,6 +439,8 @@ def _build_tools(member):
             _tool("membership_summary", "Registrations, new members, group placement, opt-outs, leaders.", _DAYS_PROP),
             _tool("event_rsvps", "Upcoming events with RSVP counts."),
             _tool("evaluation_summary", "Objective 3 evaluation: bandit strategy choices and recovery rates vs the control group."),
+            _tool("study_guide_summary", "Study guides: how many sold, money received, handed out, confirmed, waiting, "
+                  "refunds needed (paid twice), and each group's stock of the current guide."),
         ]
         dispatch.update({
             "attendance_summary": lambda days=30, **kw: attendance_summary(days),
@@ -398,6 +452,7 @@ def _build_tools(member):
             "membership_summary": lambda days=30, **kw: membership_summary(days),
             "event_rsvps": lambda **kw: event_rsvps(),
             "evaluation_summary": lambda **kw: evaluation_summary(),
+            "study_guide_summary": lambda **kw: study_guide_summary(),
         })
     return tools, dispatch
 
@@ -486,6 +541,16 @@ def build_weekly_digest():
     uncovered = cq["not_covered_general_questions_anonymous"]
     if uncovered:
         lines.append(f"Questions the materials didn't cover: {len(uncovered)} -- worth adding material on.")
+    current = next((g for g in study_guide_summary()["study_guides"] if g["on_sale"]), None)
+    if current and (current["paid"] or current["refunds_needed"]):
+        line = (f"Study guide '{current['guide']}': {current['paid']} paid (KES {current['money_received_kes']:,}), "
+                f"{current['handed_out']} handed out")
+        short = sum(1 for r in current["stock_per_group"] if r["needs_more"])
+        if short:
+            line += f", {short} group(s) need more copies"
+        if current["refunds_needed"]:
+            line += f", *{len(current['refunds_needed'])} refund(s) needed*"
+        lines.append(line + ".")
     lines += ["", "Ask me for details, e.g. \"who's been missing?\" or \"show this week's feedback\" -- "
               "or ask for the reports website to see the charts."]
     return "\n".join(lines)
