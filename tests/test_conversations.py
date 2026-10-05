@@ -384,6 +384,127 @@ class Announcements(unittest.TestCase):
         self.assertNotIn("As a leader", H.say(student(), "help"))
 
 
+def member_with_real_reg(**kw):
+    """A member whose reg number has the real DeKUT shape, so a stranger can type it during registration."""
+    _counter[0] += 1
+    wa = f"{WA_PREFIX}{_counter[0]:04d}"
+    reg = f"C026-0{SHARD}-{_counter[0]:04d}/2024"
+    add_member(reg, wa, kw.pop("name", "Real Member"), **kw)
+    return wa, reg
+
+
+def new_number():
+    _counter[0] += 1
+    return f"{WA_PREFIX}{_counter[0]:04d}"
+
+
+def change_row(reg):
+    rows = q("SELECT * FROM number_changes WHERE reg_number = %s ORDER BY id DESC LIMIT 1", (reg,))
+    return rows[0] if rows else None
+
+
+class NumberChange(unittest.TestCase):
+    """BUG-02 (critical): typing someone's reg number from a new phone used to move their account at once."""
+
+    def _stranger_types(self, reg):
+        stranger = new_number()
+        H.say(stranger, "Hi")
+        return stranger, H.say(stranger, reg)
+
+    def test_takeover_attempt_is_refused_when_the_owner_says_no(self):
+        owner, reg = member_with_real_reg()
+        stranger, reply = self._stranger_types(reg)
+        self.assertIn("already belongs to a member", reply)
+        self.assertEqual(member_row(owner)["reg_number"], reg, "nothing moves before confirmation")
+        self.assertIn("Is this you?", H.sent_to(owner)[-1])
+        self.assertIn("account stays on this number", H.say(owner, "No"))
+        self.assertEqual(member_row(owner)["reg_number"], reg)
+        self.assertIsNone(member_row(stranger))
+        self.assertIn("wasn't moved", H.sent_to(stranger)[-1])
+
+    def test_old_number_confirms_and_account_moves(self):
+        owner, reg = member_with_real_reg()
+        new, _ = self._stranger_types(reg)
+        self.assertIn("moved to your new number", H.say(owner, "yes"))
+        self.assertEqual(member_row(new)["reg_number"], reg)
+        self.assertIsNone(member_row(owner))
+        self.assertIn("Welcome back", H.sent_to(new)[-1])
+
+    def test_old_number_unreachable_goes_straight_to_the_group_leader(self):
+        leader_wa, _ = member_with_real_reg(name="Gl Leader", leads="QA-NC-G")
+        owner, reg = member_with_real_reg(group="QA-NC-G")
+        new, _ = self._stranger_types(reg)
+        failed_id = change_row(reg)["old_message_id"]
+        body = {"entry": [{"changes": [{"value": {"statuses": [{"id": failed_id, "status": "failed"}]}}]}]}
+        H.app.test_client().post("/webhook", json=body)
+        self.assertEqual(change_row(reg)["status"], "awaiting_leader")
+        self.assertIn("can't be reached on WhatsApp", H.sent_to(leader_wa)[-1])
+        self.assertIn("Gl Leader, your group leader", H.sent_to(new)[-1])
+        case = change_row(reg)["id"]
+        self.assertIn("now on their new number", H.say(leader_wa, f"APPROVE {case}"))
+        self.assertEqual(member_row(new)["reg_number"], reg)
+        self.assertIn("Welcome back", H.sent_to(new)[-1])
+
+    def test_no_answer_in_24_hours_goes_to_a_leader_who_can_deny(self):
+        from app.services.number_change import check_number_changes
+        leader_wa, _ = member_with_real_reg(name="Gl Leader", leads="QA-NC-H")
+        owner, reg = member_with_real_reg(group="QA-NC-H")
+        new, _ = self._stranger_types(reg)
+        q("UPDATE number_changes SET created_at = created_at - INTERVAL '25 hours' WHERE reg_number = %s", (reg,), fetch=False)
+        check_number_changes()
+        self.assertIn("didn't answer within 24 hours", H.sent_to(leader_wa)[-1])
+        self.assertIn("stays where it is", H.say(leader_wa, f"DENY {change_row(reg)['id']}"))
+        self.assertEqual(member_row(owner)["reg_number"], reg)
+        self.assertIn("wasn't moved", H.sent_to(new)[-1])
+
+    def test_leader_account_needs_an_exec_even_after_old_number_yes(self):
+        exec_a, _ = member_with_real_reg(name="Exec Approver", leader=True)
+        target, reg = member_with_real_reg(name="Exec Target", leader=True)
+        new, _ = self._stranger_types(reg)
+        self.assertIn("exec leader will also confirm", H.say(target, "yes"))
+        self.assertEqual(member_row(target)["reg_number"], reg, "not moved on the old number's YES alone")
+        outsider = student()
+        self.assertNotIn("now on their new number", H.say(outsider, f"APPROVE {change_row(reg)['id']}"))
+        H.say(exec_a, f"approve {change_row(reg)['id']}")
+        self.assertEqual(member_row(new)["reg_number"], reg)
+
+    def test_told_in_advance_moves_at_first_message(self):
+        owner, reg = member_with_real_reg()
+        target = new_number()
+        self.assertIn("what's your new WhatsApp number", H.say(owner, "I'm changing my number"))
+        self.assertIn("will move there straight away", H.say(owner, "+" + target))
+        reply = H.say(target, "Hi")
+        self.assertIn("Welcome back", reply)
+        self.assertEqual(member_row(target)["reg_number"], reg)
+
+    def test_told_in_advance_cancel_and_bad_input(self):
+        owner, reg = member_with_real_reg()
+        H.say(owner, "I'm changing my number")
+        self.assertIn("doesn't look like a phone number", H.say(owner, "soon"))
+        self.assertIn("nothing has changed", H.say(owner, "cancel"))
+        self.assertIsNone(change_row(reg))
+
+    def test_rsvps_follow_the_member(self):
+        owner, reg = member_with_real_reg()
+        say_all(owner, ["rsvp", "1", "yes"])
+        new, _ = self._stranger_types(reg)
+        H.say(owner, "yes")
+        self.assertEqual(q("SELECT COUNT(*) AS n FROM event_rsvps WHERE whatsapp_id = %s", (new,))[0]["n"], 1)
+        self.assertEqual(q("SELECT COUNT(*) AS n FROM event_rsvps WHERE whatsapp_id = %s", (owner,))[0]["n"], 0)
+
+    def test_attempt_limit_and_one_request_at_a_time(self):
+        owners = [member_with_real_reg() for _ in range(4)]
+        stranger = new_number()
+        replies = []
+        for _, reg in owners:
+            H.say(stranger, "Hi")
+            replies.append(H.say(stranger, reg))
+        self.assertIn("Too many attempts", replies[-1])
+        other = new_number()
+        H.say(other, "Hi")
+        self.assertIn("already a request", H.say(other, owners[0][1]))
+
+
 class BibleFollowUps(unittest.TestCase):
     """BUG-17: a context-only follow-up ('Explain verse 2') was answered with an unrelated passage."""
 

@@ -89,7 +89,8 @@ HELP_TEXT = (
     "• Upcoming events -- and RSVPing to them\n"
     "• Buying this semester's study guide\n"
     "• Sharing feedback, or asking a question for the leaders\n"
-    "• Connecting you with a leader, or DeKUTCU's contact details\n\n"
+    "• Connecting you with a leader, or DeKUTCU's contact details\n"
+    "• Changing your WhatsApp number -- tell me first (\"I'm changing my number\")\n\n"
     "Just type what you need in your own words. (Text STOP to pause check-ins.)"
 )
 

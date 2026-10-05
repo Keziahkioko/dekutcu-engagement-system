@@ -87,6 +87,7 @@ from app.services import dashboard
 from app.services import withdrawal
 from app.services import conversation
 from app.services import announcements
+from app.services import number_change
 from app.services import study_guides
 from app.services.message_generator import display_name_for
 from app.services.group_query import answer_group_question
@@ -108,7 +109,8 @@ INTENT_DEFINITIONS = {
     "feedback_response": "Giving feedback, praise, a complaint or comments about a past session or event (e.g. 'worship last Friday was amazing', 'Bible study was too long') -- even if it sounds like chit-chat.",
     "purchase_study_guide": "Wanting to buy or pay for a Bible Study guide, or asking about their own study-guide purchase (whether they've paid, where to collect it).",
     "start_study_guide": "An exec leader wanting to START or set up a NEW semester's study guide for sale (its title and price) -- not someone wanting to buy one.",
-    "update_details": "Wanting to change their own registered details (e.g. area, year of study, name).",
+    "update_details": "Wanting to change their own registered details (e.g. area, year of study, name) -- NOT their phone/WhatsApp number (that's change_number).",
+    "change_number": "Wanting to move to, or tell the bot about, a NEW phone or WhatsApp number (e.g. 'I'm changing my number', 'I got a new line', 'my number is changing to 07...').",
     "unsubscribe_followup": "Wanting to stop receiving follow-up/accountability check-ins specifically.",
     "resume_followup": "Wanting to start receiving follow-up/accountability check-ins again, having previously stopped them.",
     "withdraw_data_consent": "Wanting to withdraw consent entirely and stop being tracked/registered.",
@@ -791,11 +793,16 @@ def handle_pending_action_response(whatsapp_id, text):
         # actions -- and webhook.py routes the message normally. A leader
         # nomination is the exception: it's an invitation the member
         # didn't start, so it stays open for a later YES/NO.
-        if action != "accept_leader_nomination":
+        # Likewise "is this you moving your account?" -- asked by someone else's
+        # request; if no YES/NO comes, a leader confirms after 24 hours instead.
+        if action not in ("accept_leader_nomination", "confirm_number_change"):
             clear_pending_action(whatsapp_id)
         return None
 
     clear_pending_action(whatsapp_id)
+
+    if action == "confirm_number_change":
+        return number_change.handle_old_reply(whatsapp_id, answer)
 
     if action == "accept_leader_nomination":
         # Own branch, not the generic "no" shortcut below -- declining
@@ -940,6 +947,7 @@ _STUB_HANDLERS = {
     "purchase_study_guide": lambda member, text: study_guides.begin_purchase(member),
     "start_study_guide": lambda member, text: study_guides.begin_start_guide(member),
     "update_details": _handle_update_details,
+    "change_number": lambda member, text: number_change.begin_change_number(member),
     "unsubscribe_followup": _handle_unsubscribe_followup,
     "resume_followup": _handle_resume_followup,
     "withdraw_data_consent": _handle_withdraw_data_consent,

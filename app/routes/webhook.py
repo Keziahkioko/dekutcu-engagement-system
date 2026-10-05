@@ -62,6 +62,7 @@ from app.services import member_questions
 from app.services import study_guides
 from app.services import conversation
 from app.services import announcements
+from app.services import number_change
 from app.models.study_guide import get_pending_guide_creation, get_pending_guide_purchase
 from app.services.whatsapp_client import send_whatsapp_message
 
@@ -171,6 +172,11 @@ def receive_message():
             for change in entry.get("changes", []):
                 for message in change.get("value", {}).get("messages", []):
                     _accept_message(message)
+                # Delivery reports: a message WhatsApp couldn't deliver tells the number-change
+                # check that the old number can't answer (e.g. they used WhatsApp's "Change number").
+                for status in change.get("value", {}).get("statuses", []):
+                    if status.get("status") == "failed":
+                        number_change.handle_delivery_failure(status.get("id"))
     except (KeyError, IndexError, TypeError, AttributeError) as e:
         print(f"Could not parse incoming webhook: {e}")
 
@@ -283,6 +289,16 @@ def route_incoming_message(sender_number, message_text):
             reply = member_questions.handle_answer(sender_number, message_text)
             if reply is not None:
                 return reply
+        # A leader approving/denying a member's move to a new number ("APPROVE 4").
+        if number_change.is_decision_message(message_text):
+            reply = number_change.handle_decision(sender_number, message_text)
+            if reply is not None:
+                return reply
+        # The member was asked for their NEW number ("I'm changing my number").
+        if number_change.get_asking(sender_number) is not None:
+            reply = number_change.handle_new_number_reply(sender_number, message_text)
+            if reply is not None:
+                return reply
         # A way out of anything the member STARTED (QA 2026-10-01: flows used to
         # trap people until they typed exactly "cancel").
         if conversation.is_cancel(message_text):
@@ -303,6 +319,11 @@ def route_incoming_message(sender_number, message_text):
             dropped = get_pending_action(sender_number) is None
             return _route_after_confirmation(sender_number, message_text) + (_NOTHING_CHANGED if dropped else "")
         return _route_after_confirmation(sender_number, message_text)
+
+    # A member who told us in advance they're moving to THIS number: finish the move.
+    reply = number_change.on_unregistered_message(sender_number)
+    if reply is not None:
+        return reply
 
     if get_pending_registration(sender_number) is not None:
         return handle_message(sender_number, message_text)
@@ -377,7 +398,8 @@ def _cancel_started_flows(sender_number):
         cursor.execute(f"DELETE FROM {table} WHERE whatsapp_id = %s", (sender_number,))
         if cursor.rowcount:
             cleared.append(table)
-    cursor.execute("DELETE FROM pending_actions WHERE whatsapp_id = %s AND action <> 'accept_leader_nomination'", (sender_number,))
+    cursor.execute("""DELETE FROM pending_actions WHERE whatsapp_id = %s
+                      AND action NOT IN ('accept_leader_nomination', 'confirm_number_change')""", (sender_number,))
     if cursor.rowcount:
         cleared.append("pending_actions")
     conn.commit()

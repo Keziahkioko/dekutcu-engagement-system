@@ -51,6 +51,7 @@ from app.models.member_question import init_member_question_tables
 from app.models.withdrawal import init_consent_withdrawals_table
 from app.models.study_guide import init_study_guide_tables
 from app.services.announcements import init_announcement_tables
+from app.services.number_change import init_number_change_table, check_number_changes
 from app.services.withdrawal import finish_pending_withdrawals
 from app.services.guide_payments import check_unsettled_purchases
 from app.models.pending_message import forget_old_message_ids
@@ -118,6 +119,7 @@ def create_app():
     init_consent_withdrawals_table()
     init_study_guide_tables()
     init_announcement_tables()
+    init_number_change_table()
 
     run_workers = _should_run_background_workers()
     if run_workers:
@@ -168,6 +170,8 @@ def create_app():
     register_every_check_task("check_unsettled_guide_payments", check_unsettled_purchases)
     # Forgets Meta message IDs older than a week (repeat-delivery protection, webhook.py).
     register_every_check_task("forget_old_message_ids", forget_old_message_ids)
+    # Number changes: an old number that doesn't answer within 24h -> a leader; expiries.
+    register_every_check_task("check_number_changes", check_number_changes)
 
     if run_workers:
         start_scheduler()

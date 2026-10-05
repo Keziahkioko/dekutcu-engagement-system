@@ -34,6 +34,7 @@ from app.models.member import (
     relink_whatsapp_id,
 )
 from app.services import conversation
+from app.services import number_change
 from app.models.pending_registration import (
     get_pending_registration,
     start_pending_registration,
@@ -215,18 +216,14 @@ def _handle_reg_number(whatsapp_id, text, pending):
     if not _looks_like_reg_number(text):
         return f"That doesn't look like a registration number. Please send it like this: {REG_NUMBER_EXAMPLE}"
 
-    # Returning member messaging from a new/different phone number --
-    # recognize them by reg_number and just relink, skipping the rest
-    # of registration entirely. (Applies even mid-correction; an edge
-    # case, but safe to handle the same way either way.)
+    # A registration number that already belongs to a member: possibly them on
+    # a new phone -- but reg numbers aren't secret, so this used to let anyone
+    # take over anyone's account (QA 2026-10-01, BUG-02). Nothing moves until
+    # the old number or a leader confirms it -- see number_change.py.
     existing = get_member_by_reg_number(text)
     if existing is not None:
-        relink_whatsapp_id(text, whatsapp_id)
         delete_pending_registration(whatsapp_id)
-        return (
-            f"Welcome back, {existing['name']}! I've updated your number "
-            "on file. You're all set."
-        )
+        return number_change.request_move(existing, whatsapp_id)
 
     return _advance(
         whatsapp_id, pending,

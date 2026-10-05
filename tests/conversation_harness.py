@@ -48,6 +48,7 @@ INTENT_RULES = [
     (r"\b(talk to (a )?(leader|human|person)|speak to someone)\b", "request_human"),
     (r"\bstart (a )?new study guide\b", "start_study_guide"),
     (r"\b(buy|purchase|pay for)\b.*\bguide\b", "purchase_study_guide"),
+    (r"\b(changing my number|change my number|new (whatsapp )?number|new line)\b", "change_number"),
     (r"\b(announce|announcement|send a notice|tell (all|every))", "send_announcement"),
     (r"\b(rsvp)\b", "event_rsvp"),
     (r"\b(create|add|announce) (an? )?(new )?event\b", "create_event"),
@@ -151,6 +152,7 @@ _SEND_MODULES = [
     "app.services.escalation", "app.services.event_manager", "app.services.exec_roles", "app.services.fellowship_checkin",
     "app.services.intent_router", "app.services.leader_assignment", "app.services.member_questions",
     "app.services.reporting", "app.services.study_guides", "app.services.withdrawal", "app.services.announcements",
+    "app.services.number_change",
 ]
 _LLM_MODULES = [
     "app.services.escalation", "app.services.feedback", "app.services.feedback_themes", "app.services.group_query",
@@ -171,9 +173,13 @@ class Harness:
         if to_number is None and args:
             to_number = args[0]
         self.outbox.append((to_number, message_text))
+        message_id = f"wamid.out.{len(self.outbox)}"
 
         class _Ok:
             status_code = 200
+
+            def json(self):
+                return {"messages": [{"id": message_id}]}
         return _Ok()
 
     def start(self):
@@ -261,6 +267,9 @@ def cleanup():
     for t in QA_PENDING_TABLES:
         if _table_exists(t):      # a brand-new table only exists once the app has started
             q(f"DELETE FROM {t} WHERE whatsapp_id LIKE %s", (like,), fetch=False)
+    if _table_exists("number_changes"):
+        q("DELETE FROM number_changes WHERE old_whatsapp LIKE %s OR new_whatsapp LIKE %s OR reg_number LIKE %s",
+          (like, like, REG_PREFIX + "%"), fetch=False)
     regs = [r["reg_number"] for r in q("SELECT reg_number FROM members WHERE reg_number LIKE %s OR whatsapp_id LIKE %s",
                                        (REG_PREFIX + "%", like))]
     if regs:

@@ -139,6 +139,8 @@ def anonymise(member):
         ("UPDATE study_guides SET started_by_reg_number = %(t)s WHERE started_by_reg_number = %(r)s", None),
         ("DELETE FROM discipleship_team WHERE reg_number = %(r)s", None),
         ("UPDATE announcements SET sent_by_reg_number = %(t)s WHERE sent_by_reg_number = %(r)s", None),
+        # Number-change requests hold their phone numbers -- nothing worth keeping.
+        ("DELETE FROM number_changes WHERE reg_number = %(r)s", None),
         ("UPDATE discipleship_team SET added_by_reg_number = %(t)s WHERE added_by_reg_number = %(r)s", None),
         ("DELETE FROM dashboard_login_codes WHERE reg_number = %(r)s", None),
         ("DELETE FROM pending_leader_nominations WHERE candidate_reg_number = %(r)s", None),
