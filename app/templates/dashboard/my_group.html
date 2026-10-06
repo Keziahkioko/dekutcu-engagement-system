@@ -1,45 +1,61 @@
 {% extends "dashboard/base.html" %}
+{% from "dashboard/_ui.html" import icon, empty %}
 {% block title %}My group · DeKUTCU Reports{% endblock %}
+{% block heading %}{{ group }}{% endblock %}
+{% block lead %}Your Bible Study group at a glance.{% endblock %}
 {% block content %}
 {% set mine = attendance.bible_study[0] if attendance.bible_study else none %}
-<div class="cards">
-  <div class="card"><div class="label">Group</div><div class="value" style="font-size:20px">{{ group }}</div></div>
-  <div class="card"><div class="label">Attendance</div>
-    <div class="value">{{ mine.attendance_rate_percent ~ '%' if mine and mine.attendance_rate_percent is not none else '—' }}</div>
-    <div class="note">{{ mine.sessions_marked if mine else 0 }} session(s) marked</div></div>
-  <div class="card"><div class="label">Missing repeatedly</div>
-    <div class="value {{ 'warn' if lapsing }}">{{ lapsing | length }}</div></div>
+<div class="grid kpis">
+  <div class="card kpi"><div class="label">{{ icon('attendance') }}Attendance</div>
+    <div class="value">{% if mine and mine.attendance_rate_percent is not none %}{{ mine.attendance_rate_percent }}<small>%</small>{% else %}—{% endif %}</div>
+    <div class="hint">{{ mine.sessions_marked if mine else 0 }} session(s) marked in this period</div></div>
+  <div class="card kpi"><div class="label">{{ icon('alert') }}Missing repeatedly</div>
+    <div class="value">{{ lapsing | length }}</div><div class="hint">2 or more sessions in a row</div></div>
+  {% if guides.current_guide %}
+  <div class="card kpi"><div class="label">{{ icon('book') }}Study guide copies in hand</div>
+    <div class="value">{{ guides.copies_in_hand }}</div>
+    <div class="hint">{{ guides.paid_waiting_to_collect | length }} member(s) waiting to collect '{{ guides.current_guide }}'</div></div>
+  {% endif %}
 </div>
 
-<div class="panel">
-  <h2>Attendance rate, week by week</h2>
-  {% if bible_study_weekly %}<canvas id="bsChart"></canvas>
-  {% else %}<div class="empty">No attendance marked for your group in this period yet.</div>{% endif %}
+<div class="card" style="margin-top:14px">
+  <h3>Attendance, week by week</h3>
+  {% if bible_study_weekly %}<div class="chart"><canvas id="bsChart"></canvas></div>
+  {% else %}{{ empty("No attendance marked for your group in this period yet.") }}{% endif %}
 </div>
 
-<div class="panel">
-  <h2>Members missing repeatedly</h2>
-  <p class="note">Reasons are shown as categories only -- never members' own words.</p>
+<div class="section"><h2>Members missing repeatedly</h2></div>
+<div class="card">
   {% if lapsing %}
   <div class="table-wrap"><table>
-    <tr><th>Name</th><th>Activity</th><th>Missed in a row</th><th>Latest reason</th></tr>
+    <tr><th>Member</th><th>Missing from</th><th class="num">In a row</th><th>Latest reason</th></tr>
     {% for m in lapsing %}
-    <tr><td>{{ m.name }}</td><td>{{ m.activity }}</td><td>{{ m.missed_in_a_row }}</td><td>{{ m.latest_reason_category }}</td></tr>
+    <tr><td><b>{{ m.name }}</b></td><td>{{ m.activity }}</td>
+        <td class="num"><span class="pill {{ 'urgent' if m.missed_in_a_row >= 4 else 'attention' }}">{{ m.missed_in_a_row }}</span></td>
+        <td>{{ m.latest_reason_category or '—' }}</td></tr>
     {% endfor %}
   </table></div>
-  {% else %}<div class="empty">Nobody in your group is on a missed-session streak right now.</div>{% endif %}
+  <p class="how">{{ icon('whatsapp') }}<span>A personal message from you often helps more than another reminder.</span></p>
+  {% else %}{{ empty("Nobody in your group is on a missed-session streak right now.") }}{% endif %}
 </div>
+
+{% if guides.current_guide and guides.paid_waiting_to_collect %}
+<div class="section"><h2>Waiting to collect their study guide</h2></div>
+<div class="card">
+  <p class="sub" style="margin:0">{{ guides.paid_waiting_to_collect | join(', ') }}</p>
+  <p class="how">{{ icon('whatsapp') }}<span>When you hand guides out, tell the bot "hand over guides" and pick them from the list.</span></p>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script>
   const bs = {{ bible_study_weekly | tojson }};
-  if (bs.length) {
-    new Chart(document.getElementById('bsChart'), {
-      type: 'line',
-      data: { labels: bs.map(w => 'Week of ' + w.week), datasets: [{ label: 'Attendance %', data: bs.map(w => w.rate), borderColor: '#2f5aa8', tension: 0.2 }] },
-      options: { scales: { y: { min: 0, max: 100 } }, plugins: { legend: { display: false } } }
-    });
-  }
+  if (bs.length) new Chart(document.getElementById('bsChart'), {
+    type: 'line',
+    data: { labels: bs.map(w => DK.week(w.week)),
+            datasets: [{ label: 'Attendance %', data: bs.map(w => w.rate), borderColor: DK.palette[0], backgroundColor: DK.palette[0] + '22', fill: true }] },
+    options: { scales: { y: { min: 0, max: 100, ticks: { callback: v => v + '%' } } }, plugins: { legend: { display: false } } }
+  });
 </script>
 {% endblock %}

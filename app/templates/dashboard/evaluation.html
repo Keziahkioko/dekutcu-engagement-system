@@ -1,64 +1,69 @@
 {% extends "dashboard/base.html" %}
+{% from "dashboard/_ui.html" import icon, empty %}
 {% block title %}Evaluation · DeKUTCU Reports{% endblock %}
+{% block heading %}Evaluation{% endblock %}
+{% block lead %}Is the bot's adaptive follow-up bringing members back? (Objective 3){% endblock %}
 {% block content %}
-<div class="panel">
-  <h2>Objective 3: adaptive re-engagement</h2>
-  <p class="note">When a member misses a session and gives a reason, the bot picks a follow-up strategy.
-    Most members get the strategy the bandit is learning to prefer; a fixed ~15% control group always gets
-    the plain reminder, so the two can be compared. {{ evaluation.note }}</p>
+<div class="card">
+  <h3>How it works</h3>
+  <p class="sub" style="margin:0">When a member misses a session and gives a reason, the bot picks a follow-up message. Most members get
+    the kind of message the bot is learning works best (adaptive); a fixed ~15% <b>control group</b> always gets a plain
+    reminder, so the two can be compared fairly. {{ evaluation.note }}</p>
 </div>
 
-<div class="panel">
-  <h2>Strategy chosen each week (policy convergence)</h2>
-  <p class="note">A policy that is learning moves from roughly even shares toward the strategies that work. Adaptive members only.</p>
-  {% if arm_share_weekly.weeks %}<canvas id="armChart"></canvas>
-  {% else %}<div class="empty">No strategies chosen in this period yet.</div>{% endif %}
-</div>
-
-<div class="grid2">
-  <div class="panel">
-    <h2>Outcomes per strategy</h2>
-    {% if evaluation.adaptive_arm_choices %}
-    <div class="table-wrap"><table>
-      <tr><th>Strategy</th><th>Times chosen</th><th>Outcome known</th><th>Came back next session</th></tr>
-      {% for a in evaluation.adaptive_arm_choices %}
-      <tr><td>{{ a.arm.replace('_', ' ') }}</td><td>{{ a.times_chosen }}</td><td>{{ a.outcomes_known }}</td>
-          <td>{{ a.returned_next_session_percent ~ '%' if a.returned_next_session_percent is not none else '—' }}</td></tr>
-      {% endfor %}
-    </table></div>
-    {% else %}<div class="empty">No strategies chosen yet.</div>{% endif %}
-  </div>
-  <div class="panel">
-    <h2>Recovery within 2 sessions: adaptive vs control</h2>
+<div class="grid two" style="margin-top:14px">
+  <div class="card">
+    <h3>Came back within 2 sessions</h3>
+    <p class="sub">Adaptive follow-up vs the plain reminder.</p>
     {% if evaluation.recovery_within_2_sessions %}
-    <canvas id="recChart"></canvas>
-    <div class="table-wrap"><table>
-      <tr><th>Group</th><th>Follow-ups</th><th>Measured</th><th>Recovered</th></tr>
+    <div class="chart" style="height:220px"><canvas id="recChart"></canvas></div>
+    <div class="table-wrap" style="margin-top:12px"><table>
+      <tr><th>Group</th><th class="num">Follow-ups</th><th class="num">Measured</th><th class="num">Came back</th></tr>
       {% for g in evaluation.recovery_within_2_sessions %}
-      <tr><td>{{ g.group }}</td><td>{{ g.follow_ups }}</td><td>{{ g.measured }}</td>
-          <td>{{ g.recovered_percent ~ '%' if g.recovered_percent is not none else '—' }}</td></tr>
+      <tr><td><b>{{ g.group }}</b></td><td class="num">{{ g.follow_ups }}</td><td class="num">{{ g.measured }}</td>
+          <td class="num">{{ g.recovered_percent ~ '%' if g.recovered_percent is not none else '—' }}</td></tr>
       {% endfor %}
     </table></div>
-    {% else %}<div class="empty">No follow-ups measured yet.</div>{% endif %}
+    {% else %}{{ empty("No follow-ups measured yet.") }}{% endif %}
   </div>
+  <div class="card">
+    <h3>Which follow-up the bot is learning to prefer</h3>
+    <p class="sub">Share of each kind of message, week by week (adaptive members only). Learning shows as a shift from
+      roughly even shares towards the ones that work.</p>
+    {% if arm_share_weekly.weeks %}<div class="chart" style="height:220px"><canvas id="armChart"></canvas></div>
+    {% else %}{{ empty("No follow-ups chosen in this period yet.") }}{% endif %}
+  </div>
+</div>
+
+<div class="card" style="margin-top:14px">
+  <h3>Results for each kind of follow-up</h3>
+  {% if evaluation.adaptive_arm_choices %}
+  <div class="table-wrap"><table>
+    <tr><th>Follow-up</th><th class="num">Times chosen</th><th class="num">Outcome known</th><th>Came to the next session</th><th></th></tr>
+    {% for a in evaluation.adaptive_arm_choices %}
+    <tr><td><b>{{ a.arm.replace('_', ' ') | capitalize }}</b></td><td class="num">{{ a.times_chosen }}</td><td class="num">{{ a.outcomes_known }}</td>
+        <td style="width:35%"><div class="bar"><i style="width:{{ a.returned_next_session_percent or 0 }}%"></i></div></td>
+        <td class="num">{{ a.returned_next_session_percent ~ '%' if a.returned_next_session_percent is not none else '—' }}</td></tr>
+    {% endfor %}
+  </table></div>
+  {% else %}{{ empty("No follow-ups chosen yet.") }}{% endif %}
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-  const colours = ['#2f5aa8', '#3a9d7a', '#c07a2c', '#8a58b0'];
   const arms = {{ arm_share_weekly | tojson }};
   if (arms.weeks.length) new Chart(document.getElementById('armChart'), {
     type: 'bar',
-    data: { labels: arms.weeks.map(w => 'Week of ' + w),
-            datasets: Object.entries(arms.series).map(([k, d], i) => ({ label: k.replace('_', ' '), data: d, backgroundColor: colours[i % 4], stack: 's' })) },
+    data: { labels: arms.weeks.map(DK.week),
+            datasets: Object.entries(arms.series).map(([k, d], i) => ({ label: k.replaceAll('_', ' '), data: d, backgroundColor: DK.palette[i % 6], stack: 's' })) },
     options: { scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
   });
   const rec = {{ evaluation.recovery_within_2_sessions | tojson }};
   if (rec.length) new Chart(document.getElementById('recChart'), {
     type: 'bar',
-    data: { labels: rec.map(g => g.group), datasets: [{ data: rec.map(g => g.recovered_percent), backgroundColor: ['#2f5aa8', '#c07a2c'] }] },
-    options: { plugins: { legend: { display: false } }, scales: { y: { min: 0, max: 100, title: { display: true, text: 'Recovered %' } } } }
+    data: { labels: rec.map(g => g.group.startsWith('control') ? 'Plain reminder' : 'Adaptive'), datasets: [{ data: rec.map(g => g.recovered_percent), backgroundColor: [DK.palette[0], DK.palette[1]] }] },
+    options: { indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { min: 0, max: 100, ticks: { callback: v => v + '%' } } } }
   });
 </script>
 {% endblock %}

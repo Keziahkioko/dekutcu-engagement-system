@@ -1,85 +1,37 @@
 {% extends "dashboard/base.html" %}
-{% block title %}Overview · DeKUTCU Reports{% endblock %}
+{% from "dashboard/_ui.html" import icon, trend, empty %}
+{% block title %}Home · DeKUTCU Reports{% endblock %}
+{% block heading %}Hello, {{ viewer.name.split()[0] }}{% endblock %}
+{% block lead %}Here's what needs your attention, and how the CU is doing.{% endblock %}
 {% block content %}
-{% set rates = attendance.bible_study | map(attribute='attendance_rate_percent') | reject('none') | list %}
-<div class="cards">
-  <div class="card"><div class="label">Bible Study attendance</div>
-    <div class="value">{{ (rates | sum / rates | length) | round | int ~ '%' if rates else '—' }}</div>
-    <div class="note">{{ attendance.bible_study | length }} group(s) marked</div></div>
-  <div class="card"><div class="label">Groups with no marking</div>
-    <div class="value {{ 'warn' if attendance.groups_with_no_marking }}">{{ attendance.groups_with_no_marking | length }}</div></div>
-  <div class="card"><div class="label">Lapsing members</div>
-    <div class="value {{ 'warn' if lapsing }}">{{ lapsing | length }}</div>
-    <div class="note">2+ missed in a row</div></div>
-  <div class="card"><div class="label">Unclaimed escalations</div>
-    <div class="value {{ 'warn' if escalations.open_unclaimed_cases }}">{{ escalations.open_unclaimed_cases | length }}</div></div>
-  <div class="card"><div class="label">Feedback response rate</div>
-    <div class="value">{{ feedback.overall_response_rate_percent ~ '%' if feedback.overall_response_rate_percent is not none else '—' }}</div></div>
-  <div class="card"><div class="label">Questions awaiting an answer</div>
-    <div class="value {{ 'warn' if feedback.questions_relayed_to_leaders.awaiting_answer_anonymous }}">{{ feedback.questions_relayed_to_leaders.awaiting_answer_anonymous | length }}</div></div>
-</div>
-
-<div class="grid2">
-  <div class="panel">
-    <h2>Bible Study attendance rate, week by week</h2>
-    {% if bible_study_weekly %}<canvas id="bsChart"></canvas>
-    {% else %}<div class="empty">No attendance marked in this period yet.</div>{% endif %}
-  </div>
-  <div class="panel">
-    <h2>Fellowship check-ins ("I was there"), week by week</h2>
-    {% if fellowship_weekly.weeks %}<canvas id="fwChart"></canvas>
-    {% else %}<div class="empty">No fellowship check-ins in this period yet.</div>{% endif %}
-  </div>
-</div>
-
-<div class="panel">
-  <h2>Members missing repeatedly</h2>
-  <p class="note">Currently on a streak of 2+ missed sessions. Reasons are shown as categories only -- never members' own words.</p>
-  {% if lapsing %}
-  <div class="table-wrap"><table>
-    <tr><th>Name</th><th>Group</th><th>Activity</th><th>Missed in a row</th><th>Latest reason</th></tr>
-    {% for m in lapsing %}
-    <tr><td>{{ m.name }}</td><td>{{ m.group or '—' }}</td><td>{{ m.activity }}</td><td>{{ m.missed_in_a_row }}</td><td>{{ m.latest_reason_category }}</td></tr>
+<div class="card">
+  <h3>Needs your attention</h3>
+  {% if todo %}
+  <p class="sub">{{ todo | length }} thing{{ 's' if todo | length != 1 }} for leaders to act on.</p>
+  <ul class="todo">
+    {% for t in todo %}
+    <li>
+      <div class="dot {{ 'urgent' if t.urgent }}">{{ icon(t.icon) }}</div>
+      <div class="what"><b>{{ t.title }}</b><span>{{ t.detail }}</span></div>
+      <a class="go" href="{{ url_for(t.page, days=days) }}">See details →</a>
+    </li>
     {% endfor %}
-  </table></div>
-  {% else %}<div class="empty">Nobody is on a missed-session streak right now.</div>{% endif %}
-</div>
-
-<div class="panel">
-  <h2>Bible Study by group</h2>
-  {% if attendance.bible_study %}
-  <div class="table-wrap"><table>
-    <tr><th>Group</th><th>Sessions marked</th><th>Attendance</th></tr>
-    {% for g in attendance.bible_study %}
-    <tr><td>{{ g.group }}</td><td>{{ g.sessions_marked }}</td><td>{{ g.attendance_rate_percent ~ '%' if g.attendance_rate_percent is not none else '—' }}</td></tr>
-    {% endfor %}
-  </table></div>
-  {% else %}<div class="empty">No group has marked attendance in this period.</div>{% endif %}
-  {% if attendance.groups_with_no_marking %}
-  <p class="note">No marking recorded: {{ attendance.groups_with_no_marking | join(', ') }}</p>
+  </ul>
+  {% else %}
+  <div class="allclear"><div class="dot">{{ icon('check') }}</div>
+    <div><b>All clear</b><p>No care cases waiting, no unanswered questions, nobody missing repeatedly.</p></div></div>
   {% endif %}
 </div>
-{% endblock %}
 
-{% block scripts %}
-<script>
-  const bs = {{ bible_study_weekly | tojson }};
-  if (bs.length) {
-    new Chart(document.getElementById('bsChart'), {
-      type: 'line',
-      data: { labels: bs.map(w => 'Week of ' + w.week), datasets: [{ label: 'Attendance %', data: bs.map(w => w.rate), borderColor: '#2f5aa8', tension: 0.2 }] },
-      options: { scales: { y: { min: 0, max: 100 } }, plugins: { legend: { display: false } } }
-    });
-  }
-  const fw = {{ fellowship_weekly | tojson }};
-  if (fw.weeks.length) {
-    const colours = ['#2f5aa8', '#3a9d7a', '#c07a2c', '#8a58b0', '#b4531a'];
-    new Chart(document.getElementById('fwChart'), {
-      type: 'bar',
-      data: { labels: fw.weeks.map(w => 'Week of ' + w),
-              datasets: Object.entries(fw.series).map(([name, data], i) => ({ label: name, data: data, backgroundColor: colours[i % colours.length] })) },
-      options: { scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
-    });
-  }
-</script>
+<div class="section"><h2>At a glance</h2><p>{{ periods[days] }}</p></div>
+<div class="grid kpis">
+  {% for k in kpis %}
+  <div class="card kpi">
+    <div class="label">{{ icon(k.icon) }}{{ k.label }}</div>
+    <div class="value">{% if k.value is not none %}{{ k.value }}<small>{{ k.unit }}</small>{% else %}—{% endif %}</div>
+    {% if k.trend != 'skip' %}{{ trend(k.trend, k.trend_unit) }}{% endif %}
+    <div class="hint">{{ k.hint }}</div>
+  </div>
+  {% endfor %}
+</div>
 {% endblock %}

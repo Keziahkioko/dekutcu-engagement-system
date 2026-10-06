@@ -102,6 +102,43 @@ def fellowship_weekly(days):
     return {"weeks": weeks, "series": {name: [by_week.get(w) for w in weeks] for name, by_week in series.items()}}
 
 
+def trend(values):
+    """
+    Reports website redesign (2026-10-07): the arrow under a headline number -- the latest week with data
+    against the week before it. {"change": n}, or None when there aren't two weeks to compare.
+    """
+    known = [v for v in values if v is not None]
+    if len(known) < 2:
+        return None
+    return {"change": round(known[-1] - known[-2])}
+
+
+def fellowship_average_per_week(weekly):
+    """
+    From fellowship_weekly: per week, the average number saying "I was there" per fellowship held. An
+    average, not a total, so a week only part-way through (Monday's held, Friday's not yet) isn't a drop.
+    """
+    result = []
+    for i in range(len(weekly["weeks"])):
+        held = [s[i] for s in weekly["series"].values() if s[i] is not None]
+        result.append(round(sum(held) / len(held)) if held else None)
+    return result
+
+
+def fellowship_trend(weekly):
+    """
+    The week-on-week arrow for fellowship: each fellowship compared only with ITSELF (latest week vs the
+    week before), then averaged -- so a week where Friday's hasn't happened yet isn't read as a drop
+    (Monday alone vs Monday + Friday). None when no fellowship has both weeks.
+    """
+    filled = [i for i in range(len(weekly["weeks"])) if any(s[i] is not None for s in weekly["series"].values())]
+    if not filled or filled[-1] == 0:
+        return None
+    last = filled[-1]
+    changes = [s[last] - s[last - 1] for s in weekly["series"].values() if s[last] is not None and s[last - 1] is not None]
+    return {"change": round(sum(changes) / len(changes))} if changes else None
+
+
 def _weekly(rows, key_field, value_field="n"):
     """[{week, <key>, n}] -> (weeks, {key: [n per week]}) -- one series per key, zero-filled."""
     weeks = sorted({str(r["week"]) for r in rows})

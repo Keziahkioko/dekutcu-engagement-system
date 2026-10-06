@@ -1,0 +1,74 @@
+{% extends "dashboard/base.html" %}
+{% from "dashboard/_ui.html" import icon, empty %}
+{% block title %}Attendance · DeKUTCU Reports{% endblock %}
+{% block heading %}Attendance{% endblock %}
+{% block lead %}Are people coming — to Bible Study and to fellowship?{% endblock %}
+{% block content %}
+<div class="grid two">
+  <div class="card">
+    <h3>Bible Study attendance</h3>
+    <p class="sub">Share of members present, week by week, from the group leaders' marking.</p>
+    {% if bible_study_weekly %}<div class="chart"><canvas id="bsChart"></canvas></div>
+    {% else %}{{ empty("No attendance marked in this period yet.") }}{% endif %}
+  </div>
+  <div class="card">
+    <h3>Fellowship</h3>
+    <p class="sub">Members who said "I was there" to the evening check-in, week by week.</p>
+    {% if fellowship_weekly.weeks %}<div class="chart"><canvas id="fwChart"></canvas></div>
+    {% else %}{{ empty("No fellowship check-ins in this period yet.") }}{% endif %}
+  </div>
+</div>
+
+<div class="section"><h2>Members missing repeatedly</h2><p>2 or more missed sessions in a row</p></div>
+<div class="card">
+  {% if lapsing %}
+  <div class="table-wrap"><table>
+    <tr><th>Member</th><th>Group</th><th>Missing from</th><th class="num">In a row</th><th>Latest reason</th></tr>
+    {% for m in lapsing %}
+    <tr><td><b>{{ m.name }}</b></td><td>{{ m.group or '—' }}</td><td>{{ m.activity }}</td>
+        <td class="num"><span class="pill {{ 'urgent' if m.missed_in_a_row >= 4 else 'attention' }}">{{ m.missed_in_a_row }}</span></td>
+        <td>{{ m.latest_reason_category or '—' }}</td></tr>
+    {% endfor %}
+  </table></div>
+  <p class="how">{{ icon('whatsapp') }}<span>A personal message from their group leader often helps more than another reminder.</span></p>
+  {% else %}{{ empty("Nobody is on a missed-session streak right now.") }}{% endif %}
+</div>
+
+<div class="section"><h2>Bible Study groups</h2><p>{{ periods[days] }}</p></div>
+<div class="card">
+  {% if attendance.bible_study %}
+  <div class="table-wrap"><table>
+    <tr><th>Group</th><th class="num">Sessions marked</th><th>Attendance</th><th></th></tr>
+    {% for g in attendance.bible_study %}
+    <tr><td><b>{{ g.group }}</b></td><td class="num">{{ g.sessions_marked }}</td>
+        <td style="width:40%"><div class="bar"><i style="width:{{ g.attendance_rate_percent or 0 }}%"></i></div></td>
+        <td class="num">{{ g.attendance_rate_percent ~ '%' if g.attendance_rate_percent is not none else '—' }}</td></tr>
+    {% endfor %}
+  </table></div>
+  {% else %}{{ empty("No group has marked attendance in this period.") }}{% endif %}
+  {% if attendance.groups_with_no_marking %}
+  <p class="how">{{ icon('alert') }}<span><b>No marking yet:</b> {{ attendance.groups_with_no_marking | join(', ') }}.
+    Their leaders get the "who was absent?" question after each session.</span></p>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const bs = {{ bible_study_weekly | tojson }};
+  if (bs.length) new Chart(document.getElementById('bsChart'), {
+    type: 'line',
+    data: { labels: bs.map(w => DK.week(w.week)),
+            datasets: [{ label: 'Attendance %', data: bs.map(w => w.rate), borderColor: DK.palette[0],
+                         backgroundColor: DK.palette[0] + '22', fill: true }] },
+    options: { scales: { y: { min: 0, max: 100, ticks: { callback: v => v + '%' } } }, plugins: { legend: { display: false } } }
+  });
+  const fw = {{ fellowship_weekly | tojson }};
+  if (fw.weeks.length) new Chart(document.getElementById('fwChart'), {
+    type: 'bar',
+    data: { labels: fw.weeks.map(DK.week),
+            datasets: Object.entries(fw.series).map(([name, data], i) => ({ label: name, data: data, backgroundColor: DK.palette[i % 6] })) },
+    options: { scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+  });
+</script>
+{% endblock %}

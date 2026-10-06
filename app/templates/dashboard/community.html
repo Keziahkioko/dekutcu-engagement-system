@@ -1,106 +1,119 @@
 {% extends "dashboard/base.html" %}
-{% block title %}Companion & members · DeKUTCU Reports{% endblock %}
+{% from "dashboard/_ui.html" import icon, empty %}
+{% block title %}Community · DeKUTCU Reports{% endblock %}
+{% block heading %}Community{% endblock %}
+{% block lead %}How the CU is growing, what members ask the companion, events and study guides.{% endblock %}
 {% block content %}
-<div class="cards">
-  <div class="card"><div class="label">Registered members</div><div class="value">{{ membership.registered }}</div>
-    <div class="note">{{ membership.new_in_period }} new in this period</div></div>
-  <div class="card"><div class="label">Placed in a Bible Study group</div><div class="value">{{ membership.placed_in_group }}</div></div>
-  <div class="card"><div class="label">Opted out of check-ins</div><div class="value">{{ membership.opted_out_of_check_ins }}</div></div>
-  <div class="card"><div class="label">Withdrew consent</div><div class="value">{{ membership.withdrew_consent }}</div></div>
-  <div class="card"><div class="label">Leaders</div><div class="value">{{ membership.leaders }}</div></div>
+<div class="grid kpis">
+  <div class="card kpi"><div class="label">{{ icon('community') }}Registered members</div>
+    <div class="value">{{ membership.registered }}</div>
+    <div class="hint">{{ membership.leaders }} of them leaders</div></div>
+  <div class="card kpi"><div class="label">{{ icon('book') }}In a Bible Study group</div>
+    <div class="value">{{ membership.placed_in_group }}</div>
+    <div class="hint">{% if membership.registered %}{{ (100 * membership.placed_in_group / membership.registered) | round | int }}% of members{% endif %}</div></div>
+  <div class="card kpi"><div class="label">{{ icon('chat') }}Turned off check-ins</div>
+    <div class="value">{{ membership.opted_out_of_check_ins }}</div><div class="hint">Texted STOP — they get no follow-ups</div></div>
+  <div class="card kpi"><div class="label">{{ icon('lock') }}Left the system</div>
+    <div class="value">{{ membership.withdrew_consent }}</div><div class="hint">Withdrew consent; their details were removed</div></div>
 </div>
 
-<div class="grid2">
-  <div class="panel">
-    <h2>Questions to the companion, per week</h2>
-    {% if companion_weekly.weeks %}<canvas id="ragChart"></canvas>
-    {% else %}<div class="empty">No questions in this period.</div>{% endif %}
-    <p class="note">{{ companion.note }}</p>
+<div class="grid two" style="margin-top:14px">
+  <div class="card">
+    <h3>New registrations</h3>
+    <p class="sub">{{ membership.new_in_period }} in this period, week by week.</p>
+    {% if registrations_weekly %}<div class="chart" style="height:220px"><canvas id="regChart"></canvas></div>
+    {% else %}{{ empty("No new registrations in this period.") }}{% endif %}
   </div>
-  <div class="panel">
-    <h2>New registrations per week</h2>
-    {% if registrations_weekly %}<canvas id="regChart"></canvas>
-    {% else %}<div class="empty">No new registrations in this period.</div>{% endif %}
+  <div class="card">
+    <h3>Questions to the companion</h3>
+    <p class="sub">{{ companion.note }}</p>
+    {% if companion_weekly.weeks %}<div class="chart" style="height:220px"><canvas id="ragChart"></canvas></div>
+    {% else %}{{ empty("No questions in this period.") }}{% endif %}
   </div>
 </div>
 
-<div class="panel">
-  <h2>Questions the materials didn't cover</h2>
-  <p class="note">Anonymous. These are the gaps worth adding material on (see docs/CORPUS.md for the vetting criteria).</p>
+<div class="card" style="margin-top:14px">
+  <h3>Questions the materials didn't cover</h3>
+  <p class="sub">Anonymous. These are the gaps worth adding material on (see docs/CORPUS.md for the vetting criteria).</p>
   {% if companion.not_covered_general_questions_anonymous %}
   <div class="table-wrap"><table>
-    <tr><th>Question</th><th>Times asked</th></tr>
+    <tr><th>Question</th><th class="num">Times asked</th></tr>
     {% for c in companion.not_covered_general_questions_anonymous %}
-    <tr><td style="white-space:normal">{{ c.question }}</td><td>{{ c.times_asked }}</td></tr>
+    <tr><td class="wrap">{{ c.question }}</td><td class="num">{{ c.times_asked }}</td></tr>
     {% endfor %}
   </table></div>
-  {% else %}<div class="empty">Every general question in this period was covered.</div>{% endif %}
+  {% else %}{{ empty("Every general question in this period was covered.") }}{% endif %}
 </div>
 
-<div class="panel">
-  <h2>Upcoming events</h2>
+<div class="section"><h2>Upcoming events</h2></div>
+<div class="card">
   {% if events %}
   <div class="table-wrap"><table>
-    <tr><th>Event</th><th>Date</th><th>Type</th><th>Yes</th><th>Maybe</th><th>No</th></tr>
+    <tr><th>Event</th><th>Date</th><th class="num">Coming</th><th class="num">Maybe</th><th class="num">Not coming</th></tr>
     {% for e in events %}
-    <tr><td>{{ e.title }}</td><td>{{ e.date }}</td><td>{{ e.type }}</td>
-      {% if e.type == 'broadcast' %}<td colspan="3" class="note">announcement only -- no RSVPs</td>
-      {% else %}<td>{{ e.yes }}</td><td>{{ e.maybe }}</td><td>{{ e.no }}</td>{% endif %}</tr>
+    <tr><td><b>{{ e.title }}</b></td><td>{{ e.date }}</td>
+      {% if e.type == 'broadcast' %}<td colspan="3" class="num"><span class="pill">announcement only</span></td>
+      {% else %}<td class="num"><span class="pill good">{{ e.yes }}</span></td><td class="num">{{ e.maybe }}</td><td class="num">{{ e.no }}</td>{% endif %}</tr>
     {% endfor %}
   </table></div>
-  {% else %}<div class="empty">No upcoming events.</div>{% endif %}
+  {% else %}{{ empty("No upcoming events.") }}{% endif %}
 </div>
 
-<div class="panel">
-  <h2>Study guides</h2>
-  {% if guides %}
+<div class="section"><h2>Study guides</h2></div>
+{% if guides %}
+<div class="card">
   <div class="table-wrap"><table>
-    <tr><th>Guide</th><th>Price</th><th>Paid</th><th>Money received</th><th>Handed out</th>
-        <th>Confirmed by member</th><th>Waiting to collect</th><th>Refunds needed</th></tr>
+    <tr><th>Guide</th><th class="num">Paid</th><th class="num">Money received</th><th class="num">Handed out</th>
+        <th class="num">Confirmed by member</th><th class="num">Waiting to collect</th><th class="num">Refunds needed</th></tr>
     {% for g in guides %}
-    <tr><td>{{ g.guide }}{% if g.on_sale %} <span class="note">(on sale)</span>{% endif %}</td>
-        <td>KES {{ g.price_kes }}</td><td>{{ g.paid }}</td><td>KES {{ "{:,}".format(g.money_received_kes) }}</td>
-        <td>{{ g.handed_out }}</td><td>{{ g.receipt_confirmed_by_member }}</td><td>{{ g.paid_waiting_to_collect }}</td>
-        <td class="{{ 'warn' if g.refunds_needed }}">{{ g.refunds_needed | length }}</td></tr>
+    <tr><td><b>{{ g.guide }}</b> {% if g.on_sale %}<span class="pill good">on sale</span>{% endif %}<br><span class="note" style="color:var(--muted);font-size:12.5px">KES {{ g.price_kes }} each</span></td>
+        <td class="num">{{ g.paid }}</td><td class="num">KES {{ "{:,}".format(g.money_received_kes) }}</td>
+        <td class="num">{{ g.handed_out }}</td><td class="num">{{ g.receipt_confirmed_by_member }}</td><td class="num">{{ g.paid_waiting_to_collect }}</td>
+        <td class="num">{% if g.refunds_needed %}<span class="pill attention">{{ g.refunds_needed | length }}</span>{% else %}0{% endif %}</td></tr>
     {% endfor %}
   </table></div>
   {% for g in guides if g.refunds_needed %}
-  <p class="note"><strong>Refunds needed for '{{ g.guide }}'</strong> (paid twice):
-    {% for r in g.refunds_needed %}{{ r.member }} -- KES {{ r.amount_kes }}{% if r.mpesa_code %} (M-Pesa {{ r.mpesa_code }}){% endif %}{% if not loop.last %}; {% endif %}{% endfor %}</p>
+  <p class="how">{{ icon('alert') }}<span><b>Refunds needed for '{{ g.guide }}'</b> (paid twice):
+    {% for r in g.refunds_needed %}{{ r.member }} — KES {{ r.amount_kes }}{% if r.mpesa_code %} (M-Pesa {{ r.mpesa_code }}){% endif %}{% if not loop.last %}; {% endif %}{% endfor %}</span></p>
   {% endfor %}
-  {% for g in guides if g.on_sale %}
-  <h3 style="font-size:15px;margin:14px 0 6px">'{{ g.guide }}' -- copies per group</h3>
+</div>
+{% for g in guides if g.on_sale %}
+<div class="card" style="margin-top:14px">
+  <h3>'{{ g.guide }}' — copies per group</h3>
+  <p class="sub">Copies count once the group leader confirms receiving them.</p>
   {% if g.stock_per_group %}
   <div class="table-wrap"><table>
-    <tr><th>Group</th><th>Leader</th><th>Received</th><th>Handed out</th><th>In hand</th><th>Waiting</th><th>Unconfirmed</th></tr>
+    <tr><th>Group</th><th>Leader</th><th class="num">Received</th><th class="num">Handed out</th><th class="num">In hand</th><th class="num">Waiting</th><th>Not yet confirmed</th></tr>
     {% for r in g.stock_per_group %}
-    <tr><td>{{ r.group }}</td><td>{{ r.leader }}</td><td>{{ r.received }}</td><td>{{ r.handed_out }}</td>
-        <td class="{{ 'warn' if r.needs_more }}">{{ r.in_hand }}{% if r.needs_more %} -- needs more{% endif %}</td>
-        <td>{{ r.waiting }}</td>
-        <td>{% if r.unconfirmed_batches %}{{ r.unconfirmed_batches }} batch(es){% endif %}{% if r.unconfirmed_batches and r.unconfirmed_handovers %}, {% endif %}{% if r.unconfirmed_handovers %}{{ r.unconfirmed_handovers }} hand-over(s){% endif %}</td></tr>
+    <tr><td><b>{{ r.group }}</b></td><td>{{ r.leader }}</td><td class="num">{{ r.received }}</td><td class="num">{{ r.handed_out }}</td>
+        <td class="num">{% if r.needs_more %}<span class="pill attention">{{ r.in_hand }} — needs more</span>{% else %}{{ r.in_hand }}{% endif %}</td>
+        <td class="num">{{ r.waiting }}</td>
+        <td>{% if r.unconfirmed_batches %}{{ r.unconfirmed_batches }} batch(es){% endif %}{% if r.unconfirmed_batches and r.unconfirmed_handovers %}, {% endif %}{% if r.unconfirmed_handovers %}{{ r.unconfirmed_handovers }} hand-over(s){% endif %}{% if not r.unconfirmed_batches and not r.unconfirmed_handovers %}—{% endif %}</td></tr>
     {% endfor %}
   </table></div>
-  {% else %}<div class="empty">No batches or payments for this guide yet.</div>{% endif %}
-  {% if g.waiting_without_group_leader %}<p class="note">{{ g.waiting_without_group_leader }} paid member(s) with no group leader collect from the Guides Coordinator.</p>{% endif %}
-  {% endfor %}
-  {% else %}<div class="empty">No study guide has been started yet.</div>{% endif %}
+  {% else %}{{ empty("No batches or payments for this guide yet.") }}{% endif %}
+  {% if g.waiting_without_group_leader %}<p class="how">{{ icon('book') }}<span>{{ g.waiting_without_group_leader }} paid member(s) with no group leader collect from the Guides Coordinator.</span></p>{% endif %}
 </div>
+{% endfor %}
+{% else %}
+<div class="card">{{ empty("No study guide has been started yet.") }}</div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script>
-  const colours = { answered: '#3a9d7a', not_covered: '#c07a2c', secondary_issue: '#8a58b0', escalated: '#b4531a', error: '#5f6b7a' };
+  const outcomeNames = { answered: 'Answered', not_covered: 'Not covered', secondary_issue: 'Secondary issue', escalated: 'Passed to a leader', error: 'Error' };
   const rag = {{ companion_weekly | tojson }};
   if (rag.weeks.length) new Chart(document.getElementById('ragChart'), {
     type: 'bar',
-    data: { labels: rag.weeks.map(w => 'Week of ' + w),
-            datasets: Object.entries(rag.series).map(([k, d]) => ({ label: k.replace('_', ' '), data: d, backgroundColor: colours[k] || '#2f5aa8', stack: 's' })) },
+    data: { labels: rag.weeks.map(DK.week),
+            datasets: Object.entries(rag.series).map(([k, d], i) => ({ label: outcomeNames[k] || k, data: d, backgroundColor: DK.palette[i % 6], stack: 's' })) },
     options: { scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
   });
   const reg = {{ registrations_weekly | tojson }};
   if (reg.length) new Chart(document.getElementById('regChart'), {
     type: 'bar',
-    data: { labels: reg.map(w => 'Week of ' + w.week), datasets: [{ data: reg.map(w => w.n), backgroundColor: '#2f5aa8' }] },
+    data: { labels: reg.map(w => DK.week(w.week)), datasets: [{ data: reg.map(w => w.n), backgroundColor: DK.palette[1] }] },
     options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
   });
 </script>
