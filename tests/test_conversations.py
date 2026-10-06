@@ -155,11 +155,66 @@ class RsvpFlow(unittest.TestCase):
         self.assertEqual(len(orders), 1)
 
     def test_invalid_event_numbers_reprompt(self):
+        # Each from a fresh start: a SECOND unclear reply in a row now stops the flow (see NeverLoop).
         s = student()
-        H.say(s, "rsvp")
         for bad in ["0", "99", "-1", "1.5", "abc"]:
             with self.subTest(bad=bad):
+                H.say(s, "rsvp")
                 self.assertIn("Please reply with a number", H.say(s, bad))
+                H.say(s, "cancel")
+
+
+class NeverLoop(unittest.TestCase):
+    """
+    Found live by Keziah (2026-10-06): "create an event" kept answering "Please reply 1 or 2". Now natural
+    answers count, and in ANY flow a second unclear reply in a row stops it instead of re-asking forever.
+    """
+
+    def setUp(self):
+        self.leader = student(name="Qa Leader", leader=True)
+
+    def test_event_type_understands_natural_answers(self):
+        for answer in ["tracked", "Tracked", "one", "1.", "rsvp", "broadcast", "Two", "announcement only"]:
+            with self.subTest(answer=answer):
+                H.say(self.leader, "create an event")
+                self.assertIn("What's this event called?", H.say(self.leader, answer))
+                H.say(self.leader, "cancel")
+
+    def test_second_unclear_reply_in_a_row_stops_the_flow(self):
+        H.say(self.leader, "create an event")
+        self.assertIn("Please reply 1 or 2", H.say(self.leader, "hmm"))
+        reply = H.say(self.leader, "xyz")
+        self.assertIn("I've stopped creating the event so you're not stuck", reply)
+        self.assertIn('Say "create an event"', reply)
+        self.assertFalse(pending("pending_event_creation", self.leader))
+        self.assertIn("Here's what I can help with", H.say(self.leader, "help"), "free again afterwards")
+        H.say(self.leader, "create an event")
+        self.assertIn("Please reply 1 or 2", H.say(self.leader, "hmm"), "a new attempt starts fresh -- not stopped at once")
+        H.say(self.leader, "cancel")
+
+    def test_only_two_in_a_row_count(self):
+        s = student()
+        H.say(s, "rsvp")
+        self.assertIn("Please reply with a number", H.say(s, "0"))
+        H.say(s, "1")                                              # a good answer in between
+        self.assertIn("YES, NO, or MAYBE", H.say(s, "hmm"))        # first unclear at THIS step: re-asked
+        self.assertIn("I've stopped the RSVP", H.say(s, "hmm"))     # second in a row: stopped
+        self.assertFalse(pending("pending_rsvps", s))
+
+    def test_announce_kind_whole_words_and_natural_answers(self):
+        H.say(self.leader, "send a notice")
+        self.assertIn("Please reply 1", H.say(self.leader, "update"), "'update' must not read as 'date'")
+        self.assertFalse(pending("pending_event_creation", self.leader))
+        self.assertIn("Who should get it?", H.say(self.leader, "two"))
+        self.assertTrue(pending("pending_announcement", self.leader))
+        H.say(self.leader, "cancel")
+
+    def test_numbered_list_flow_stops_too(self):
+        H.say(self.leader, "update the exec roles")
+        first = H.say(self.leader, "999")
+        self.assertIn("Please reply with a number", first)
+        self.assertIn("I've stopped recording exec roles", H.say(self.leader, "999"))
+        self.assertFalse(pending("pending_exec_role", self.leader))
 
 
 class StopKeyword(unittest.TestCase):

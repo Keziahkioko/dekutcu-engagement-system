@@ -52,7 +52,7 @@ _PENDING_TABLES = [
     "pending_leader_nominations", "pending_question_ask", "pending_reason_capture",
     "pending_reassignment_resolutions", "pending_registrations", "pending_rsvps", "pending_guide_creation",
     "pending_guide_purchase", "pending_announcement", "pending_coordinator_choice", "pending_batch",
-    "pending_handover",
+    "pending_handover", "last_flow_reply",
 ]
 
 

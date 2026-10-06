@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 PY=venv/Scripts/python.exe; [ -x "$PY" ] || PY=python
 TEST_SETS=(
   "BasicInteraction StopKeyword UnpromptedAbsence"
-  "ConfirmationTraps OtherLeaderFlows"
+  "ConfirmationTraps OtherLeaderFlows NeverLoop"
   "RsvpFlow Security"
   "EventCreation Registration"
   "FellowshipCheckin Webhook BibleFollowUps"

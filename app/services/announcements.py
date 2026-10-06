@@ -171,11 +171,12 @@ def handle_message(whatsapp_id, message_text):
     step = pending["step"]
 
     if step == "awaiting_kind":
+        # Whole words only: "update everyone" must not read as "date".
         n = conversation.normalise(text)
-        if n in ("1", "date", "an event", "event", "on a date", "something on a date") or "date" in n or "event" in n:
+        if n in ("1", "one", "first", "the first one") or re.search(r"\b(date|dated|event|events)\b", n):
             delete_pending_announcement(whatsapp_id)
             return event_manager.start_create_event(whatsapp_id)
-        if n in ("2", "message", "just a message", "a message", "notice", "a notice") or "message" in n:
+        if n in ("2", "two", "second", "the second one", "notice", "a notice") or re.search(r"\b(message|announcement)\b", n):
             _set_pending(whatsapp_id, "awaiting_audience")
             return _audience_question(member)
         return "Please reply 1 (something on a date) or 2 (just a message) -- or 'cancel'."

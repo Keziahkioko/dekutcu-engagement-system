@@ -92,10 +92,18 @@ def handle_create_event_message(whatsapp_id, message_text):
     return "Something went wrong on my end. Let's start over -- message me again."
 
 
+_TRACKED = {"1", "one", "first", "the first", "first one", "the first one", "tracked", "track", "rsvp", "rsvps",
+            "with rsvp", "with rsvps", "tracked event"}
+_BROADCAST = {"2", "two", "second", "the second", "second one", "the second one", "broadcast", "announcement",
+              "announcement only", "just an announcement", "no rsvp", "no rsvps"}
+
+
 def _handle_type(whatsapp_id, text):
-    if text == "1":
+    # Natural answers count too (Keziah, 2026-10-06: an exact "1" or "2" was the only way through).
+    n = conversation.normalise(text)
+    if n in _TRACKED:
         event_type = "tracked"
-    elif text == "2":
+    elif n in _BROADCAST:
         event_type = "broadcast"
     else:
         return (

@@ -66,7 +66,9 @@ from app.services import number_change
 from app.services import guide_coordinator
 from app.services import guide_batches
 from app.services import guide_handover
-from app.models.study_guide import get_pending_guide_creation, get_pending_guide_purchase
+from app.models.study_guide import get_pending_guide_creation, get_pending_guide_purchase, delete_pending_guide_creation
+from app.models.last_flow_reply import get_last_flow_reply, set_last_flow_reply, clear_last_flow_reply, fingerprint
+from app.database import get_connection
 from app.services.whatsapp_client import send_whatsapp_message
 
 webhook_bp = Blueprint("webhook", __name__)
@@ -339,7 +341,61 @@ def route_incoming_message(sender_number, message_text):
     return start_registration(sender_number)
 
 
+# "Never loop forever" (Keziah, 2026-10-06): the flows a member can be part-way through, in the
+# order _route_flows checks them -- (table, what it is, how to restart it, how to stop it).
+_LOOP_FLOWS = [
+    ("pending_leader_nominations", "the group-leader change", "nominate a group leader", delete_pending_leader_nomination),
+    ("pending_area_changes", "the area change", "change my area", delete_pending_area_change),
+    ("pending_reassignment_resolutions", "the reassignments", "resolve reassignments", delete_pending_reassignment_resolution),
+    ("pending_exec_role", "recording exec roles", "update the exec roles", delete_pending_exec_role),
+    ("pending_event_creation", "creating the event", "create an event", delete_pending_event_creation),
+    ("pending_handover", "recording the hand-over", "hand over guides", guide_handover.delete_pending),
+    ("pending_batch", "recording the batch", "give guides to a leader", guide_batches.delete_pending),
+    ("pending_coordinator_choice", "choosing the Guides Coordinator", "appoint the guides coordinator",
+     guide_coordinator.delete_pending),
+    ("pending_announcement", "the announcement", "send an announcement", announcements.delete_pending_announcement),
+    ("pending_guide_creation", "starting the new study guide", "start a new study guide", delete_pending_guide_creation),
+    ("pending_rsvps", "the RSVP", "RSVP", delete_pending_rsvp),
+]
+
+
+def _open_flow(sender_number):
+    """The first flow (from _LOOP_FLOWS) the member is part-way through, or None -- one database call."""
+    sql = " UNION ALL ".join(f"SELECT {i} AS i FROM {t} WHERE whatsapp_id = %s"
+                             for i, (t, *_rest) in enumerate(_LOOP_FLOWS))
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"SELECT MIN(i) AS i FROM ({sql}) open_flows", [sender_number] * len(_LOOP_FLOWS))
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return None if row is None or row["i"] is None else _LOOP_FLOWS[row["i"]]
+
+
 def _route_after_confirmation(sender_number, message_text):
+    """
+    _route_flows, plus "never loop forever": if the bot is about to send, in the same flow, EXACTLY the
+    reply it sent last time, the member has given two unclear answers in a row -- stop the flow instead
+    (re-asks like "Please reply 1 or 2" are word-for-word the same each time). Only a fingerprint of the
+    last reply is kept. A new attempt always starts with no flow open, which overwrites the old fingerprint.
+    """
+    before = _open_flow(sender_number)
+    reply = _route_flows(sender_number, message_text)
+    after = _open_flow(sender_number)
+    if after is None:
+        return reply
+    table, what, restart, stop = after
+    last = get_last_flow_reply(sender_number)
+    if after is before and last and last["flow"] == table and last["reply_hash"] == fingerprint(reply):
+        stop(sender_number)
+        clear_last_flow_reply(sender_number)
+        return (f"Sorry, I'm not following -- I've stopped {what} so you're not stuck. "
+                f"Say \"{restart}\" whenever you want to start again.")
+    set_last_flow_reply(sender_number, table, reply)
+    return reply
+
+
+def _route_flows(sender_number, message_text):
     """A registered member's routing after the YES/NO confirmation step."""
     if get_pending_leader_nomination(sender_number) is not None:
         return leader_assignment.handle_message(sender_number, message_text)
