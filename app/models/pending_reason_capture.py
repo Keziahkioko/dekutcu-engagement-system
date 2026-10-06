@@ -21,6 +21,9 @@ def init_pending_reason_capture_table():
             created_at TIMESTAMP
         )
     """)
+    # 2026-10-07: TRUE when the absence was only inferred from silence (the noon sweep) -- then
+    # "I was there" corrects it. Never for a leader's Bible Study marking.
+    cursor.execute("ALTER TABLE pending_reason_capture ADD COLUMN IF NOT EXISTS from_silence BOOLEAN DEFAULT FALSE")
     conn.commit()
     cursor.close()
     conn.close()
@@ -39,15 +42,15 @@ def get_pending_reason_capture(whatsapp_id):
     return row
 
 
-def start_pending_reason_capture(whatsapp_id, absence_id, created_at):
+def start_pending_reason_capture(whatsapp_id, absence_id, created_at, from_silence=False):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO pending_reason_capture (whatsapp_id, absence_id, created_at)
-        VALUES (%s, %s, %s)
+        INSERT INTO pending_reason_capture (whatsapp_id, absence_id, created_at, from_silence)
+        VALUES (%s, %s, %s, %s)
         ON CONFLICT (whatsapp_id) DO UPDATE
-        SET absence_id = EXCLUDED.absence_id, created_at = EXCLUDED.created_at
-    """, (whatsapp_id, absence_id, created_at))
+        SET absence_id = EXCLUDED.absence_id, created_at = EXCLUDED.created_at, from_silence = EXCLUDED.from_silence
+    """, (whatsapp_id, absence_id, created_at, from_silence))
     conn.commit()
     cursor.close()
     conn.close()

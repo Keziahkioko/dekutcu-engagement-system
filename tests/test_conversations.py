@@ -337,6 +337,100 @@ class FellowshipCheckin(unittest.TestCase):
         self.assertTrue(pending("pending_reason_capture", s), "a bare no asks why")
 
 
+class CheckinWindow(unittest.TestCase):
+    """
+    Found live by Keziah: she answered Wednesday's check-in on Thursday afternoon -- the question had closed
+    at noon, her "yes" was read as small talk and her attendance lost. Now (2026-10-07) a question stays open
+    until the next check-in replaces it; noon closes it only for silent REGULARS ("we missed you", in time for
+    the next session); a bare YES/NO on a later day after other chat is checked first.
+    """
+
+    def setUp(self):
+        today = date.today()
+        self.day = today - timedelta(days=(today.weekday() - 4) % 7 or 7)    # the last Friday before today
+
+    def _asked(self, regular=False):
+        from app.models.pending_fellowship_checkin import start_pending_fellowship_checkin
+        s = student()
+        if regular:   # checked in on the 3 Fridays before -- a regular
+            for w in (1, 2, 3):
+                q("INSERT INTO fellowship_checkins (reg_number, activity_type, checkin_date, created_at) VALUES (%s, %s, %s, %s)",
+                  (member_row(s)["reg_number"], "friday_fellowship", self.day - timedelta(weeks=w), now_utc()), fetch=False)
+        start_pending_fellowship_checkin(s, "friday_fellowship", self.day, now_utc().isoformat())
+        return s
+
+    def _attended(self, wa):
+        return [r["checkin_date"] for r in q("SELECT checkin_date FROM fellowship_checkins WHERE reg_number = %s AND checkin_date = %s",
+                                             (member_row(wa)["reg_number"], self.day))]
+
+    def _absent(self, wa):
+        return bool(q("SELECT 1 FROM absences WHERE reg_number = %s AND activity_date = %s", (member_row(wa)["reg_number"], self.day)))
+
+    def _noon(self, *members):
+        from app.services import fellowship_checkin as fc
+        rows = [r for wa in members for r in q("SELECT * FROM pending_fellowship_checkin WHERE whatsapp_id = %s", (wa,))]
+        with patch.object(fc, "get_stale_pending_checkins", lambda: rows):    # only these members, not the demo's
+            fc.process_stale_checkins()
+
+    def test_late_yes_counts_when_nothing_else_was_said(self):
+        s = self._asked()
+        reply = H.say(s, "yes")
+        self.assertEqual(self._attended(s), [self.day], "Keziah's case: a late yes now counts")
+        self.assertIn("on Friday", reply)
+
+    def test_late_bare_yes_after_other_chat_is_checked_first(self):
+        s = self._asked()
+        H.say(s, "What time is Sunday service?")
+        self.assertIn("Just to be sure -- were you at", H.say(s, "yes"))
+        self.assertEqual(self._attended(s), [], "not counted until confirmed")
+        H.say(s, "yes")
+        self.assertEqual(self._attended(s), [self.day])
+
+    def test_clear_answers_count_at_once_even_after_other_chat(self):
+        s = self._asked()
+        H.say(s, "What time is Sunday service?")
+        H.say(s, "I was there")
+        self.assertEqual(self._attended(s), [self.day])
+        s = self._asked()
+        H.say(s, "What time is Sunday service?")
+        H.say(s, "No, I had class")
+        self.assertTrue(self._absent(s))
+
+    def test_noon_closes_only_silent_regulars_and_i_was_there_corrects_it(self):
+        regular, other = self._asked(regular=True), self._asked()
+        self._noon(regular, other)
+        self.assertTrue(pending("pending_fellowship_checkin", other), "a non-regular's question stays open")
+        self.assertFalse(pending("pending_fellowship_checkin", regular))
+        self.assertTrue(self._absent(regular))
+        self.assertIn("didn't hear back", H.sent_to(regular)[-1])
+        self.assertIn("marked you as at", H.say(regular, "Sorry, I was there!"))
+        self.assertFalse(self._absent(regular), "the guessed absence is removed")
+        self.assertEqual(self._attended(regular), [self.day])
+
+    def test_leader_marked_absence_is_not_overruled(self):
+        from app.services import reason_capture
+        from app.models.absence import create_absence
+        s = student()
+        absence = create_absence(member_row(s)["reg_number"], "bible_study", self.day, now_utc().isoformat())
+        reason_capture.begin_reason_capture(s, absence)          # a leader's marking: not from silence
+        H.say(s, "I was there")
+        self.assertTrue(q("SELECT 1 FROM absences WHERE id = %s", (absence,)), "only a guess from silence is corrected")
+
+    def test_new_checkin_replaces_the_old_question_properly(self):
+        from app.services import fellowship_checkin as fc
+        regular = self._asked(regular=True)
+        before = len(H.sent_to(regular))
+        with patch.object(fc, "get_data_consenting_members", lambda: [member_row(regular)]), \
+             patch.object(fc, "claim_checkin_broadcast", lambda *a: True), \
+             patch.object(fc, "_today", lambda: self.day + timedelta(weeks=1)):
+            fc.send_fellowship_checkin(4)
+        self.assertTrue(self._absent(regular), "the silent regular's absence is recorded, not lost")
+        new = H.sent_to(regular)[before:]
+        self.assertEqual(len(new), 1, "only the new check-in -- no 'we missed you' at the same moment")
+        self.assertEqual(q("SELECT checkin_date FROM pending_fellowship_checkin WHERE whatsapp_id = %s", (regular,))[0]["checkin_date"],
+                         self.day + timedelta(weeks=1))
+
+
 class UnpromptedAbsence(unittest.TestCase):
     def test_no_developer_placeholder_BUG12(self):
         s = student()

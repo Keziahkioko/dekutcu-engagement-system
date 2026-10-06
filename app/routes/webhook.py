@@ -28,7 +28,7 @@ from app.models.pending_reassignment_resolution import get_pending_reassignment_
 from app.models.pending_event_creation import get_pending_event_creation, delete_pending_event_creation
 from app.models.pending_rsvp import get_pending_rsvp, delete_pending_rsvp
 from app.models.pending_attendance_marking import get_pending_attendance_marking
-from app.models.pending_fellowship_checkin import get_pending_fellowship_checkin
+from app.models.pending_fellowship_checkin import get_pending_fellowship_checkin, mark_checkin_flag
 from app.models.pending_reason_capture import get_pending_reason_capture
 from app.models.pending_escalation_consent import get_pending_escalation_consent
 from app.models.pending_feedback import get_pending_feedback
@@ -544,6 +544,9 @@ def _route_remaining(sender_number, message_text):
         reply = fellowship_checkin.handle_checkin_message(sender_number, message_text)
         if reply is not None:
             return reply
+        # Talking about something else while the question is open: a bare YES/NO on a later
+        # day is then checked first ("do you mean Wednesday's fellowship?") -- 2026-10-07.
+        mark_checkin_flag(sender_number, "other_messages")
     if get_pending_reason_capture(sender_number) is not None:
         # Can hand the message back (expired, or not actually a reason) --
         # then it's routed normally, like feedback.

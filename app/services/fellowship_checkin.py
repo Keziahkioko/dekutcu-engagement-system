@@ -51,13 +51,14 @@ import re
 from datetime import datetime, timezone, date, timedelta
 
 from app.models.member import get_data_consenting_members, get_member_by_whatsapp_id
-from app.models.absence import create_absence
+from app.models.absence import create_absence, absence_exists_for_date
 from app.models.fellowship_checkin import record_checkin, count_checkins_on_dates
 from app.models.pending_fellowship_checkin import (
     get_pending_fellowship_checkin,
     start_pending_fellowship_checkin,
     delete_pending_fellowship_checkin,
     get_stale_pending_checkins,
+    mark_checkin_flag,
 )
 from app.models.checkin_broadcast import claim_checkin_broadcast, get_checkin_broadcast
 from app.services.whatsapp_client import send_whatsapp_message
@@ -155,6 +156,11 @@ def send_fellowship_checkin(weekday, triggered_by="scheduled"):
         )
         response = send_whatsapp_message(member["whatsapp_id"], message)
         if response.status_code == 200:
+            # The new question REPLACES any older one still open (2026-10-07) -- close that one
+            # properly first (a silent regular's absence recorded), instead of overwriting it.
+            older = get_pending_fellowship_checkin(member["whatsapp_id"])
+            if older is not None:
+                _close_unanswered(older, follow_up=False)
             start_pending_fellowship_checkin(member["whatsapp_id"], activity_type, today, _now())
             sent += 1
     return sent
@@ -203,6 +209,16 @@ def handle_checkin_message(whatsapp_id, message_text):
         if "?" in text or not reason_capture.is_reason(text):
             return None
 
+    # The safeguard (Keziah, 2026-10-07): the question can now stay open for days, and a bare YES/NO
+    # on a later day, after the member has talked about other things, may answer something else
+    # ("Would you like to know more?") -- so check once which fellowship they mean.
+    bare = normalised in _YES_VARIANTS or normalised in _BARE_NO_VARIANTS or conversation.strict_yes_no(text) is not None
+    if bare and checkin_date < _today() and pending["other_messages"] and not pending["confirm_asked"]:
+        mark_checkin_flag(whatsapp_id, "confirm_asked")
+        return (f"Just to be sure -- were you at {display_name} on {checkin_date.strftime('%A')} "
+                f"({checkin_date.day} {checkin_date.strftime('%b')})? Reply YES if you were, "
+                "or NO (or tell me what kept you away) if you weren't.")
+
     delete_pending_fellowship_checkin(whatsapp_id)
     member = get_member_by_whatsapp_id(whatsapp_id)
     reg_number = member["reg_number"] if member else None
@@ -214,7 +230,8 @@ def handle_checkin_message(whatsapp_id, message_text):
         broadcast = get_checkin_broadcast(activity_type, checkin_date)
         trigger = broadcast["triggered_by"] if broadcast else "scheduled"
         feedback.begin_feedback(whatsapp_id, reg_number, activity_type, checkin_date, trigger)
-        return feedback.build_feedback_prompt(display_name, member["name"])
+        when = "today" if checkin_date == _today() else f"on {checkin_date.strftime('%A')}"
+        return feedback.build_feedback_prompt(display_name, member["name"], when)
 
     if activity_type not in _TRACKED_ACTIVITIES:
         # Sunday service -- feedback-only, never an absence. See module docstring.
@@ -265,34 +282,46 @@ def is_regular(reg_number, activity_type, weekday, today):
 
 def process_stale_checkins():
     """
-    The scheduled daily-noon task -- sweeps any pending_fellowship_checkin
+    The scheduled daily-noon task -- looks at every pending_fellowship_checkin
     row sent on an earlier calendar day, still unanswered. Only members
-    already a "regular" for that specific day get treated as lapsed,
-    and never for an untracked activity (Sunday service) -- silence
-    there is just cleared.
+    already a "regular" for that specific day are treated as lapsed (and
+    their question closed); never for an untracked activity (Sunday
+    service). Everyone else's question stays open until the next check-in.
     """
     for row in get_stale_pending_checkins():
-        whatsapp_id = row["whatsapp_id"]
-        activity_type = row["activity_type"]
-        checkin_date = row["checkin_date"]
-        weekday = checkin_date.weekday()
+        # Check-in window (Keziah, 2026-10-07): only a silent REGULAR is closed at noon -- their
+        # "we missed you" has to reach them before the next session. Everyone else's question stays
+        # open (a late "yes" still counts) until the next check-in replaces it.
+        if row["activity_type"] in _TRACKED_ACTIVITIES and _is_regular_row(row):
+            _close_unanswered(row, follow_up=True)
 
-        delete_pending_fellowship_checkin(whatsapp_id)
 
-        if activity_type not in _TRACKED_ACTIVITIES:
-            continue
+def _is_regular_row(row):
+    member = get_member_by_whatsapp_id(row["whatsapp_id"])
+    return bool(member) and is_regular(member["reg_number"], row["activity_type"],
+                                       row["checkin_date"].weekday(), row["checkin_date"])
 
-        member = get_member_by_whatsapp_id(whatsapp_id)
-        if not member or not is_regular(member["reg_number"], activity_type, weekday, checkin_date):
-            continue
 
-        # The absence is real attendance data either way; only the
-        # "why did you miss it?" message depends on follow-up consent
-        # (they may have texted STOP after the check-in went out).
-        absence_id = create_absence(member["reg_number"], activity_type, checkin_date, _now())
-        if not member["followup_consent"]:
-            continue
-        message = reason_capture.build_silence_reason_prompt(display_name_for(activity_type), member["name"])
-        response = send_whatsapp_message(whatsapp_id, message)
-        if response.status_code == 200:
-            reason_capture.begin_reason_capture(whatsapp_id, absence_id)
+def _close_unanswered(row, follow_up):
+    """
+    Closes an unanswered check-in question. For a silent regular of a tracked fellowship, records the
+    absence (inferred from silence) -- and, at the noon sweep (follow_up=True), asks what kept them
+    away. When a NEW check-in replaces the question (follow_up=False) the absence is recorded quietly:
+    no "we missed you" at the same moment as a new "were you there today?".
+    """
+    whatsapp_id, activity_type, checkin_date = row["whatsapp_id"], row["activity_type"], row["checkin_date"]
+    delete_pending_fellowship_checkin(whatsapp_id)
+    if activity_type not in _TRACKED_ACTIVITIES or not _is_regular_row(row):
+        return
+    member = get_member_by_whatsapp_id(whatsapp_id)
+    if absence_exists_for_date(member["reg_number"], activity_type, checkin_date):
+        return
+    # The absence is real attendance data either way; only the "why did you miss it?" message
+    # depends on follow-up consent (they may have texted STOP after the check-in went out).
+    absence_id = create_absence(member["reg_number"], activity_type, checkin_date, _now())
+    if not follow_up or not member["followup_consent"]:
+        return
+    message = reason_capture.build_silence_reason_prompt(display_name_for(activity_type), member["name"])
+    response = send_whatsapp_message(whatsapp_id, message)
+    if response.status_code == 200:
+        reason_capture.begin_reason_capture(whatsapp_id, absence_id, from_silence=True)

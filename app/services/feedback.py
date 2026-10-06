@@ -85,10 +85,11 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def build_feedback_prompt(activity_display_name, name=None):
+def build_feedback_prompt(activity_display_name, name=None, when="today"):
+    """when: "today", or e.g. "on Wednesday" for a late reply to the check-in (2026-10-07)."""
     greeting = f"Hey {name.split()[0]}, thanks" if name else "Thanks"
     return (
-        f"{greeting} for being at {activity_display_name} today! How was it? "
+        f"{greeting} for being at {activity_display_name} {when}! How was it? "
         "Share any feedback, questions, recommendations or challenges you have -- "
         "we read every reply.\n\nReply 'skip' if you'd rather not."
     )

@@ -9,7 +9,7 @@ TEST_SETS=(
   "ConfirmationTraps OtherLeaderFlows NeverLoop"
   "RsvpFlow Security"
   "EventCreation Registration"
-  "FellowshipCheckin Webhook BibleFollowUps"
+  "FellowshipCheckin CheckinWindow Webhook BibleFollowUps"
   "Fuzz"
   "Announcements"
   "NumberChange"

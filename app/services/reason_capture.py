@@ -27,6 +27,7 @@ could disagree with each other.
 """
 
 import json
+import re
 from datetime import datetime, timezone, timedelta
 
 from app.models.pending_reason_capture import (
@@ -97,9 +98,32 @@ def build_silence_reason_prompt(activity_description, name=None):
     )
 
 
-def begin_reason_capture(whatsapp_id, absence_id):
-    """Persists the pending state only -- does NOT send anything."""
-    start_pending_reason_capture(whatsapp_id, absence_id, _now())
+def begin_reason_capture(whatsapp_id, absence_id, from_silence=False):
+    """Persists the pending state only -- does NOT send anything. from_silence: the noon sweep's guess."""
+    start_pending_reason_capture(whatsapp_id, absence_id, _now(), from_silence)
+
+
+# "I was there" in reply to the noon "we missed you" question (2026-10-07, Keziah): the absence was
+# only GUESSED from silence, so the member's word corrects it. Explicit phrases only -- a bare "yes"
+# to "would you mind sharing what kept you away?" could mean "yes, I'll share".
+_I_WAS_THERE = re.compile(
+    r"\b(i was there|i was present|i attended|i did attend|i came|i went|i was at (the )?(fellowship|service)|"
+    r"was there|nilikuja|nilifika|nilikuwepo|niliattend|nilienda)\b")
+
+
+def _correct_silence_absence(whatsapp_id, absence_id):
+    """The member says they WERE there: remove the guessed absence and count their attendance."""
+    from app.models.absence import delete_absence
+    from app.models.fellowship_checkin import record_checkin, count_checkins_on_dates
+    from app.services.fellowship_checkin import display_name_for
+    absence = get_absence_by_id(absence_id)
+    if absence is None:
+        return "Thanks for letting us know!"
+    delete_absence(absence_id)
+    if not count_checkins_on_dates(absence["reg_number"], absence["activity_type"], [absence["activity_date"]]):
+        record_checkin(absence["reg_number"], absence["activity_type"], absence["activity_date"], _now())
+    return (f"Ah, sorry about that -- thanks for letting us know! I've marked you as at "
+            f"{display_name_for(absence['activity_type'])}. 🙂")
 
 
 def classify_reason(text):
@@ -237,6 +261,10 @@ def handle_reason_capture_message(whatsapp_id, message_text):
     if _is_expired(pending):
         delete_pending_reason_capture(whatsapp_id)
         return None
+
+    if pending["from_silence"] and _I_WAS_THERE.search(text.lower().replace("’", "'")):
+        delete_pending_reason_capture(whatsapp_id)
+        return _correct_silence_absence(whatsapp_id, pending["absence_id"])
 
     if text.lower() != "skip" and not _is_reason(text):
         delete_pending_reason_capture(whatsapp_id)

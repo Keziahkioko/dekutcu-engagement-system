@@ -94,6 +94,19 @@ def create_absence(reg_number, activity_type, activity_date, created_at):
     return absence_id
 
 
+def delete_absence(absence_id):
+    """
+    Only for an absence INFERRED from silence that the member then corrects ("I was there") --
+    2026-10-07. Its pending_reason_capture row (the only table pointing here) must be gone first.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM absences WHERE id = %s", (absence_id,))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
 def get_absence_by_id(absence_id):
     conn = get_connection()
     cursor = conn.cursor()

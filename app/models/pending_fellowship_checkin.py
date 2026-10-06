@@ -22,6 +22,11 @@ def init_pending_fellowship_checkin_table():
             created_at TIMESTAMP
         )
     """)
+    # Check-in window (Keziah, 2026-10-07): a question now stays open until the next check-in replaces
+    # it, so a bare YES/NO on a LATER day may be about something else. other_messages: the member has
+    # said something else since; confirm_asked: the bot has asked "do you mean Wednesday's fellowship?".
+    cursor.execute("ALTER TABLE pending_fellowship_checkin ADD COLUMN IF NOT EXISTS other_messages BOOLEAN DEFAULT FALSE")
+    cursor.execute("ALTER TABLE pending_fellowship_checkin ADD COLUMN IF NOT EXISTS confirm_asked BOOLEAN DEFAULT FALSE")
     conn.commit()
     cursor.close()
     conn.close()
@@ -61,6 +66,17 @@ def delete_pending_fellowship_checkin(whatsapp_id):
         "DELETE FROM pending_fellowship_checkin WHERE whatsapp_id = %s",
         (whatsapp_id,)
     )
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def mark_checkin_flag(whatsapp_id, flag):
+    """Sets other_messages or confirm_asked on the member's open check-in question."""
+    assert flag in ("other_messages", "confirm_asked")
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"UPDATE pending_fellowship_checkin SET {flag} = TRUE WHERE whatsapp_id = %s", (whatsapp_id,))
     conn.commit()
     cursor.close()
     conn.close()
