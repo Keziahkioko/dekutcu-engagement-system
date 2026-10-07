@@ -21,7 +21,8 @@ import threading
 from flask import Blueprint, request, jsonify
 
 from app.models.pending_registration import get_pending_registration, delete_pending_registration
-from app.models.pending_action import get_pending_action
+from app.models.pending_action import get_pending_action, set_pending_action, clear_pending_action
+from app.models.member import get_member_by_whatsapp_id
 from app.models.pending_leader_nomination import get_pending_leader_nomination, delete_pending_leader_nomination
 from app.models.pending_area_change import get_pending_area_change, delete_pending_area_change
 from app.models.pending_reassignment_resolution import get_pending_reassignment_resolution, delete_pending_reassignment_resolution
@@ -46,6 +47,7 @@ from app.services.intent_router import (
     is_resume_message,
     set_followup_consent,
     opt_out_of_followup,
+    CONFIRMATION_QUESTIONS,
     handle_pending_action_response,
     handle_message as handle_intent_message,
 )
@@ -587,9 +589,29 @@ def _handle_global_stop(sender_number):
     and tells their leader once -- see opt_out_of_followup). Full data
     withdrawal is a separate, deliberate action (withdraw_data_consent
     intent), not a keyword.
+
+    BUG-13, settled by Keziah (2026-10-07): people often type "stop" to mean
+    "stop THIS", and STOP used to switch off check-ins and tell their leaders
+    at once. Now there is always a confirmation step:
+      - something they started is in progress -> STOP stops just that;
+      - nothing in progress -> "Just to confirm: you'll stop receiving
+        check-ins... Reply YES" (the same question as asking in words);
+      - STOP again while that question is open counts as YES.
     """
     if is_registered(sender_number):
-        return opt_out_of_followup(sender_number)
+        pending = get_pending_action(sender_number)
+        if pending is not None and pending["action"] == "unsubscribe_followup":
+            clear_pending_action(sender_number)
+            return opt_out_of_followup(sender_number)
+        cleared = _cancel_started_flows(sender_number)
+        if cleared:
+            return (_cancelled_reply(cleared)
+                    + "\n\n(If you meant to stop check-in messages, send STOP again.)")
+        member = get_member_by_whatsapp_id(sender_number)
+        if member is not None and not member["followup_consent"]:
+            return "Check-in messages are already off for you. Reply RESUME any time to turn them back on."
+        set_pending_action(sender_number, "unsubscribe_followup")
+        return CONFIRMATION_QUESTIONS["unsubscribe_followup"]
 
     if get_pending_registration(sender_number) is not None:
         delete_pending_registration(sender_number)

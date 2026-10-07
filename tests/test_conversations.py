@@ -218,12 +218,52 @@ class NeverLoop(unittest.TestCase):
 
 
 class StopKeyword(unittest.TestCase):
-    def test_stop_still_works_everywhere_as_the_opt_out(self):
-        """STOP is the global opt-out by design (keyword, no AI) -- kept; see the open decision BUG-13."""
+    """
+    BUG-13, settled by Keziah (2026-10-07): STOP always has a confirmation step. Something in progress ->
+    STOP stops just that; nothing in progress -> "Just to confirm... Reply YES"; STOP again counts as YES.
+    """
+
+    def test_stop_mid_flow_stops_only_that(self):
         s = student()
         H.say(s, "rsvp")
-        self.assertIn("won't receive follow-up check-ins", H.say(s, "STOP"))
+        reply = H.say(s, "STOP")
+        self.assertIn("send STOP again", reply)
+        self.assertFalse(pending("pending_rsvps", s))
+        self.assertTrue(member_row(s)["followup_consent"], "check-ins NOT switched off by a stop mid-flow")
+
+    def test_stop_with_nothing_in_progress_asks_first(self):
+        s = student()
+        self.assertIn("Just to confirm: you'll stop receiving follow-up check-ins", H.say(s, "STOP"))
+        self.assertTrue(member_row(s)["followup_consent"], "not until they say YES")
+        self.assertIn("won't receive follow-up check-ins", H.say(s, "yes"))
         self.assertFalse(member_row(s)["followup_consent"])
+
+    def test_no_keeps_check_ins_and_stop_again_counts_as_yes(self):
+        s = student()
+        H.say(s, "stop")
+        self.assertIn("nothing has changed", H.say(s, "no"))
+        self.assertTrue(member_row(s)["followup_consent"])
+        H.say(s, "STOP")
+        H.say(s, "STOP")
+        self.assertFalse(member_row(s)["followup_consent"], "STOP, STOP = opted out")
+        self.assertIn("already off", H.say(s, "STOP"))
+
+    def test_stop_after_a_flow_then_confirm(self):
+        s = student()
+        H.say(s, "rsvp")
+        H.say(s, "STOP")                                          # stops the RSVP
+        self.assertIn("Just to confirm", H.say(s, "STOP"))       # nothing in progress now -> asks
+        self.assertTrue(member_row(s)["followup_consent"])
+
+    def test_stop_to_a_check_in_question_is_asked_too(self):
+        """A check-in the BOT sent isn't something the member started -- STOP there most likely means 'no more of these'."""
+        from app.models.pending_fellowship_checkin import start_pending_fellowship_checkin
+        s = student()
+        start_pending_fellowship_checkin(s, "friday_fellowship", date.today(), now_utc().isoformat())
+        self.assertIn("Just to confirm", H.say(s, "STOP"))
+        H.say(s, "YES")
+        self.assertFalse(member_row(s)["followup_consent"])
+        self.assertFalse(pending("pending_fellowship_checkin", s), "the open check-in question is closed too")
 
 
 class EventCreation(unittest.TestCase):
