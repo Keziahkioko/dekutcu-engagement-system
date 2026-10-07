@@ -21,8 +21,8 @@
 {%- endmacro %}
 {% macro trend(t, unit='') -%}
 {%- if t is none -%}<span class="trend none">no earlier week to compare</span>
-{%- elif t.change > 0 -%}<span class="trend up">▲ {{ t.change }}{{ unit }} vs previous week</span>
-{%- elif t.change < 0 -%}<span class="trend down">▼ {{ -t.change }}{{ unit }} vs previous week</span>
+{%- elif t.change > 0 -%}<span class="trend up">▲ {{ t.change }}{{ unit }}{{ 's' if unit == ' pt' and t.change != 1 }} vs previous week</span>
+{%- elif t.change < 0 -%}<span class="trend down">▼ {{ -t.change }}{{ unit }}{{ 's' if unit == ' pt' and t.change != -1 }} vs previous week</span>
 {%- else -%}<span class="trend flat">same as previous week</span>{%- endif -%}
 {%- endmacro %}
 {% macro empty(text) -%}<div class="empty">{{ icon('check') }}<span>{{ text }}</span></div>{%- endmacro %}

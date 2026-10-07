@@ -172,7 +172,8 @@
         <a href="{{ url_for('dashboard.my_group', days=days) }}" class="{{ 'active' if active == 'my_group' }}">{{ icon('group') }}<span>My group</span></a>
       {% endif %}
     </nav>
-    <div class="who"><b>{{ viewer.name }}</b>{{ viewer.exec_office or ('Group leader' if viewer.leads_group_label else 'Leader') }}
+    <div class="who"><b>{{ viewer.name }}</b>{{ [viewer.exec_office or ('Exec leader' if viewer.is_leader else none),
+      ('Leads ' ~ viewer.leads_group_label) if viewer.leads_group_label else none] | select | join(' · ') }}
       <form class="logout" method="post" action="{{ url_for('dashboard.logout') }}"><button type="submit">Log out</button></form></div>
   </aside>
   <main>

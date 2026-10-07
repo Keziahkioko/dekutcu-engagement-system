@@ -136,7 +136,9 @@ EXEC_OFFICES = ["Chairperson", "First Vice Chairperson", "Second Vice Chairperso
 # rather than TRUNCATE ... CASCADE, which would silently clear any table that happens to link here.
 HISTORY_TABLES = ["event_rsvps", "events", "escalations", "escalation_cases", "pending_reason_capture", "absences",
                   "attendance_markings", "fellowship_checkins", "checkin_broadcasts", "member_questions",
-                  "pending_feedback", "feedback_requests", "rag_queries"]
+                  "pending_feedback", "feedback_requests", "rag_queries",
+                  # Stage 14 (added 2026-10-07): the semester's study guide -- see seed_study_guide().
+                  "guide_purchases", "guide_batches", "study_guides", "guide_coordinator"]
 
 
 def at(day, hour, minute=0):
@@ -487,6 +489,7 @@ def main():
     many("""INSERT INTO member_questions (reg_number, question, created_at, answered_by_reg_number, answer_text, answered_at)
             VALUES (%s, %s, %s, %s, %s, %s)""", mq_rows)
     many("""INSERT INTO event_rsvps (event_id, whatsapp_id, response, responded_at) VALUES (%s, %s, %s, %s)""", rsvp_rows)
+    guide_counts = seed_study_guide(cur, members, leader_of, execs)
     conn.commit()
 
     print(f"Demo semester seeded: {START} to {TODAY} ({WEEKS} weeks), seed {SEED}")
@@ -495,10 +498,112 @@ def main():
                      ("fellowship 'present' replies", len(checkins)), ("absences", len(all_absences)),
                      ("feedback requests", len(feedback_rows)), ("escalation cases", len(cases) + len(open_cases)),
                      ("companion questions", len(rag_rows)), ("members' questions", len(mq_rows)),
-                     ("events", len(EVENTS)), ("RSVPs", len(rsvp_rows))]:
+                     ("events", len(EVENTS)), ("RSVPs", len(rsvp_rows))] + guide_counts:
         print(f"  {label:30} {n}")
     cur.close()
     conn.close()
+
+
+def seed_study_guide(cur, members, leader_of, execs):
+    """
+    Stage 14 (added 2026-10-07, so the guides part of the reports website has something to show): this
+    semester's study guide, KES 70, through the whole flow -- a Discipleship Ministry Director, the Guides
+    Coordinator they appointed, batches given to group leaders and confirmed by them (one not yet), members
+    paying over M-Pesa (codes start "DEMO", clearly fake), guides handed over and confirmed by members (some
+    not yet, one disputed), two members who paid twice (refunds), one group short of copies, and a few
+    members with no group leader who collect from the Coordinator.
+    Only THIS semester's guide: every demo member registered during this semester, so nobody could have
+    bought last semester's. Uses its own random generator, so adding it changes nothing else in the semester.
+    """
+    g_rng = random.Random(SEED + 14)
+    taken = set(leader_of.values()) | set(execs)
+    free = [m for m in members if m["reg"] not in taken]
+    director, coordinator = g_rng.sample(free, 2)
+    cur.execute("UPDATE members SET is_leader = TRUE, exec_office = 'Discipleship Ministry Director' WHERE reg_number = %s",
+                (director["reg"],))
+    started = at(START + timedelta(weeks=1), 10)
+    cur.execute("""INSERT INTO guide_coordinator (id, reg_number, appointed_by_reg_number, appointed_at)
+                   VALUES (TRUE, %s, %s, %s)""", (coordinator["reg"], director["reg"], started - timedelta(days=2)))
+    cur.execute("""INSERT INTO study_guides (title, price_kes, is_current, started_by_reg_number, started_at)
+                   VALUES ('Romans: Grace Alone', 70, TRUE, %s, %s) RETURNING id""", (director["reg"], started))
+    guide_id = cur.fetchone()["id"]
+
+    groups = sorted(leader_of)
+    unconfirmed_group, short_group = g_rng.sample(groups, 2)   # a batch not yet confirmed; a group short of copies
+    batches, purchases, receipts = [], [], [0]
+
+    def receipt():
+        receipts[0] += 1
+        return f"DEMO{receipts[0]:06d}"
+
+    def pay(m, paid_at, status="paid"):
+        if "registered" in m:   # nobody pays before they registered, or in the future
+            joined = datetime.combine(m["registered"], datetime.min.time()) + timedelta(hours=g_rng.randint(9, 20))
+            paid_at = min(max(paid_at, joined), NOW - timedelta(hours=2))
+        purchase = {"reg": m["reg"], "status": status, "paid_at": paid_at, "receipt": receipt(),
+                    "collected_at": None, "collected_by": None, "receipt_status": None, "answered_at": None}
+        purchases.append(purchase)
+        return purchase
+
+    def hand_over(p, giver):
+        p["collected_at"] = min(p["paid_at"] + timedelta(days=g_rng.randint(1, 8), hours=g_rng.randint(0, 6)), NOW - timedelta(hours=3))
+        p["collected_by"] = giver
+        roll = g_rng.random()
+        if roll < 0.84:
+            p["receipt_status"], p["answered_at"] = "confirmed", p["collected_at"] + timedelta(minutes=g_rng.randint(20, 600))
+        elif roll < 0.97:
+            p["receipt_status"] = "awaiting"       # handed over, the member hasn't answered yet
+        else:                                      # "No, I didn't get it" -- the hand-over was reversed
+            p["receipt_status"], p["answered_at"] = "disputed", p["collected_at"] + timedelta(hours=2)
+            p["collected_at"] = p["collected_by"] = None
+
+    def paid_time():
+        days = min(g_rng.expovariate(1 / 12), (NOW - started).days - 1)   # most pay in the first weeks
+        return started + timedelta(days=days, hours=g_rng.randint(0, 12))
+
+    for g in groups:
+        roster = [m for m in members if m["group"] == g]
+        buyers = [m for m in roster if g_rng.random() < 0.62]
+        paid = sorted((pay(m, paid_time()) for m in buyers), key=lambda p: p["paid_at"])
+        leader = leader_of[g]
+        if g == unconfirmed_group:      # given 2 days ago, the leader hasn't replied RECEIVED yet
+            given = NOW - timedelta(days=2)
+            batches.append((guide_id, leader, max(5, len(paid)), coordinator["reg"], given, "pending", None, None, given + timedelta(hours=24)))
+            continue
+        copies = max(5, -(-len(paid) // 5) * 5) if g != short_group else max(3, len(paid) - 3)
+        given = started + timedelta(days=g_rng.randint(4, 10))
+        batches.append((guide_id, leader, copies, coordinator["reg"], given, "confirmed", copies, given + timedelta(hours=g_rng.randint(2, 20)), None))
+        for p in paid[:copies]:
+            if p["paid_at"] < NOW - timedelta(days=3) and g_rng.random() < 0.85:
+                hand_over(p, leader)
+
+    # Members with no Bible Study group collect from the Guides Coordinator.
+    for m in [m for m in members if not m["group"] and m["reg"] != coordinator["reg"]]:
+        if g_rng.random() < 0.4:
+            p = pay(m, paid_time())
+            if g_rng.random() < 0.5 and p["paid_at"] < NOW - timedelta(days=3):
+                hand_over(p, coordinator["reg"])
+
+    # Two members paid twice (the second M-Pesa prompt was approved too) -> refunds needed.
+    for p in g_rng.sample([p for p in purchases if p["status"] == "paid"], 2):
+        pay({"reg": p["reg"]}, p["paid_at"] + timedelta(minutes=4), status="duplicate")
+
+    many_rows = [(guide_id, p["reg"], 70, None, p["status"], f"ws_CO_DEMO_{i:05d}", p["receipt"], 0,
+                  "The service request is processed successfully.", p["paid_at"] - timedelta(minutes=1), p["paid_at"],
+                  p["collected_at"], p["collected_by"], p["receipt_status"], p["answered_at"])
+                 for i, p in enumerate(purchases, 1)]
+    psycopg2.extras.execute_batch(cur, """
+        INSERT INTO guide_purchases (guide_id, reg_number, amount_kes, phone, status, checkout_request_id, mpesa_receipt,
+               result_code, result_desc, requested_at, paid_at, collected_at, collected_by_reg_number, receipt_status,
+               receipt_answered_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""", many_rows)
+    psycopg2.extras.execute_batch(cur, """
+        INSERT INTO guide_batches (guide_id, leader_reg_number, copies, given_by_reg_number, given_at, status,
+               copies_received, confirmed_at, reminded_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""", batches)
+    paid = [p for p in purchases if p["status"] == "paid"]
+    return [("study guide purchases (paid)", len(paid)),
+            ("  handed out", sum(p["collected_at"] is not None for p in paid)),
+            ("  refunds needed", sum(p["status"] == "duplicate" for p in purchases)),
+            ("guide batches", len(batches))]
 
 
 if __name__ == "__main__":

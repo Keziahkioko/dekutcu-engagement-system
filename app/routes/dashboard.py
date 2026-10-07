@@ -188,7 +188,7 @@ def overview(member):
     kpis = [
         {"label": "Bible Study attendance", "icon": "attendance", "unit": "%",
          "value": round(sum(rates) / len(rates)) if rates else None,
-         "trend": dashboard.trend([w["rate"] for w in bs_weekly]), "trend_unit": " pts",
+         "trend": dashboard.trend([w["rate"] for w in bs_weekly]), "trend_unit": " pt",
          "hint": f"Average across {len(rates)} group{'s' if len(rates) != 1 else ''} that marked attendance"},
         {"label": "At each fellowship", "icon": "smile", "unit": " people",
          "value": round(sum(held) / len(held)) if held else None,
@@ -196,7 +196,7 @@ def overview(member):
          "hint": "On average, said \"I was there\" to the evening check-in"},
         {"label": "Answer when asked for feedback", "icon": "chat", "unit": "%",
          "value": feedback["overall_response_rate_percent"],
-         "trend": dashboard.trend([w["rate"] for w in dashboard.feedback_weekly(days)]), "trend_unit": " pts",
+         "trend": dashboard.trend([w["rate"] for w in dashboard.feedback_weekly(days)]), "trend_unit": " pt",
          "hint": "Members who reply to \"how was it?\""},
         {"label": "New members", "icon": "user-plus", "unit": "",
          "value": membership["new_in_period"], "trend": "skip",
