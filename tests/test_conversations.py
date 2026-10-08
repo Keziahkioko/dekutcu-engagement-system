@@ -497,6 +497,27 @@ class CrisisLines(unittest.TestCase):
         self.assertNotIn("1199", reply)
 
 
+class AIOutage(unittest.TestCase):
+    """2026-10-08: when the AI service is down, ordinary messages get an honest 'try again', not a false alarm."""
+
+    def _during_outage(self, wa, text):
+        with patch("app.services.intent_router.classify_intent", lambda *a, **k: "service_unavailable"):
+            return H.say(wa, text)
+
+    def test_ordinary_message_gets_try_again_not_an_alarm(self):
+        s = student()
+        reply = self._during_outage(s, "What time is fellowship?")
+        self.assertIn("having trouble right now", reply)
+        self.assertFalse(pending("pending_escalation_consent", s), "no 'may I tell a leader?' for an ordinary message")
+
+    def test_urgent_words_still_escalate_during_an_outage(self):
+        s = student()
+        self.assertIn("*1199*", self._during_outage(s, "I want to end my life"))
+        t = student()
+        self._during_outage(t, "I feel hopeless")
+        self.assertTrue(pending("pending_escalation_consent", t), "distress words still ask 'may I tell a leader?'")
+
+
 class UnpromptedAbsence(unittest.TestCase):
     def test_no_developer_placeholder_BUG12(self):
         s = student()

@@ -70,6 +70,48 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
+# When the AI safety check fails (Keziah, 2026-10-08): it used to assume "distress" for ANY failure, so
+# during an AI outage EVERY member got "may I let a leader know?" -- false alarms that teach people to
+# ignore it. Two kinds of failure are now told apart:
+#   1. The AI REFUSED to label the message (Groq reports it as a JSON-validation error carrying the AI's
+#      own text) -- seen for real suicidal messages, where the model writes a crisis paragraph instead.
+#      About the message, so stay cautious: crisis-like AI text -> urgent; otherwise distress.
+#   2. The service is DOWN (network, quota, server error) -- says nothing about the member: fall back to
+#      a keyword safety net (lists agreed with Keziah), else none.
+_URGENT_WORDS = re.compile(
+    r"\b(kill myself|end my life|end it all|take my (own )?life|suicid\w*|want to die|wish i (was|were) dead|"
+    r"better off dead|(don'?t|do not) want to (live|be alive)|no reason to live|hurt myself|harm myself|"
+    r"self[- ]?harm|cut myself|overdose|nataka kujiua|nitajiua|nijiue|kujitoa uhai|sitaki kuishi|nataka kufa|bora nife)\b")
+_DISTRESS_WORDS = re.compile(
+    r"\b(hopeless|depressed|depression|can'?t cope|cannot cope|can'?t go on|giving up on life|panic attack|"
+    r"falling apart|breaking down|worthless|no ?one cares|nobody cares|so alone|so lonely|overwhelmed|"
+    r"being abused|nimechoka na maisha|sina tumaini|nimekata tamaa|msongo wa mawazo|nimelemewa|"
+    r"niko down sana|sina mtu wa kuongea na)\b")
+_CRISIS_REPLY = re.compile(r"suicid|self[- ]?harm|crisis|hotline|helpline|emergency|kill (yourself|themsel)|"
+                           r"end (your|their) life|you'?re not alone", re.IGNORECASE)
+
+
+def keyword_severity(text):
+    """The safety net when the AI can't be reached: urgent / distress phrases, else 'none'."""
+    lowered = (text or "").lower().replace("’", "'")
+    if _URGENT_WORDS.search(lowered):
+        return "acute_risk"
+    if _DISTRESS_WORDS.search(lowered):
+        return "distress"
+    return "none"
+
+
+def is_refusal(error):
+    """True when the AI answered but wouldn't produce the requested label (kind 1 above), not a service failure."""
+    return "json_validate_failed" in str(error) or type(error).__name__ in ("BadRequestError", "JSONDecodeError")
+
+
+def _refusal_severity(text, ai_text):
+    if keyword_severity(text) == "acute_risk" or _CRISIS_REPLY.search(ai_text or ""):
+        return "acute_risk"
+    return "distress"
+
+
 def assess_severity(text):
     try:
         response = create_chat_completion(
@@ -80,15 +122,22 @@ def assess_severity(text):
             response_format={"type": "json_object"},
             temperature=0,
         )
-        parsed = json.loads(response.choices[0].message.content)
-        severity = parsed.get("severity", "none")
-        return severity if severity in ("none", "distress", "acute_risk") else "none"
     except Exception as e:
-        try:
-            print(f"Severity assessment failed, defaulting to 'distress' (safer than 'none'): {e}")
-        except UnicodeEncodeError:
-            print("Severity assessment failed, defaulting to 'distress' (safer than 'none') (error message omitted -- contained non-ASCII characters)")
-        return "distress"
+        if is_refusal(e):
+            severity = _refusal_severity(text, str(e))
+            print(f"Severity check: the AI refused to label the message -> {severity}")
+        else:
+            severity = keyword_severity(text)
+            print(f"Severity check unavailable ({type(e).__name__}) -> keyword safety net: {severity}")
+        return severity
+    content = response.choices[0].message.content or ""
+    try:
+        severity = json.loads(content).get("severity", "none")
+    except (ValueError, AttributeError):
+        severity = _refusal_severity(text, content)   # answered, but not the label -- treat like a refusal
+        print(f"Severity check: unexpected AI answer -> {severity}")
+        return severity
+    return severity if severity in ("none", "distress", "acute_risk") else "none"
 
 
 def find_target_leaders(member):

@@ -249,11 +249,13 @@ def classify_intent(message_text, whatsapp_id=None):
         return "unclear"
 
     except Exception as e:
-        try:
-            print(f"Intent classification failed, falling back to 'needs_support': {e}")
-        except UnicodeEncodeError:
-            print("Intent classification failed, falling back to 'needs_support' (error message omitted -- contained non-ASCII characters)")
-        return "needs_support"
+        # A REFUSAL (the AI answered but wouldn't give a label -- seen for acute self-harm messages)
+        # still falls back to needs_support. A SERVICE failure (network, quota, server) says nothing
+        # about the member -- "service_unavailable" (Keziah, 2026-10-08): it used to send every
+        # message during an outage down the support path.
+        refused = escalation.is_refusal(e)
+        print(f"Intent classification failed ({type(e).__name__}) -> {'needs_support' if refused else 'service_unavailable'}")
+        return "needs_support" if refused else "service_unavailable"
 
 
 def set_followup_consent(whatsapp_id, value):
@@ -666,6 +668,19 @@ def _handle_needs_support(member, text):
     )
 
 
+def _handle_service_unavailable(member, text):
+    """
+    The AI couldn't be reached to understand the message (2026-10-08). The keyword safety net still
+    catches urgent and distress messages; anything else gets an honest "try again shortly".
+    """
+    severity = escalation.keyword_severity(text)
+    if severity == "acute_risk":
+        return escalation.escalate_acute(member, "needs_support", text)
+    if severity == "distress":
+        return escalation.start_consent_flow(member["whatsapp_id"], "needs_support", text)
+    return "Sorry -- I'm having trouble right now. Please try again in a few minutes."
+
+
 def _handle_view_group_leaders(member, text):
     confirmed, pending = get_leader_status()
     covered_areas = {area for area, _, _ in confirmed} | {area for area, _ in pending}
@@ -982,6 +997,7 @@ _STUB_HANDLERS = {
     "request_human": _handle_request_human,
     "contact_info": lambda member, text: org_contacts.contact_reply(),
     "needs_support": _handle_needs_support,
+    "service_unavailable": _handle_service_unavailable,
     "leadership_query": lambda member, text: reporting.answer_leadership_question(member, text),
     "reports_website": lambda member, text: dashboard.link_reply(member),
     "send_announcement": lambda member, text: announcements.begin(member),
