@@ -88,8 +88,16 @@ def _get_pool():
         with _pool_lock:
             if _pool is None:  # re-check -- another thread may have created it while we waited for the lock
                 database_url = os.getenv("DATABASE_URL")
+                # Network timeouts (Keziah, 2026-10-08): without them, a connection whose network drops
+                # in the MIDDLE of a query waits forever -- a webhook worker would freeze silently and
+                # every member it serves would get no reply until Render restarts (found when test runs
+                # froze on the laptop's dropping internet). connect_timeout: give up on a connection
+                # attempt after 15s. TCP keepalives: after 30s of silence, check every 10s; 3 missed
+                # checks (~1 minute) = dead -> the query ERRORS instead of hanging, the worker's error
+                # handling apologises and carries on, and the pool discards the dead connection.
                 _pool = psycopg2.pool.ThreadedConnectionPool(
-                    minconn=6, maxconn=10, dsn=database_url, cursor_factory=RealDictCursor
+                    minconn=6, maxconn=10, dsn=database_url, cursor_factory=RealDictCursor,
+                    connect_timeout=15, keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
                 )
     return _pool
 
