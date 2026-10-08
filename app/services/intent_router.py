@@ -582,13 +582,26 @@ _NEEDS_CONTEXT = re.compile(
     r"|^(what does (that|this|it) mean|explain (that|this|it)( more)?|tell me more|what do you mean|meaning|why|and then|go on)$")
 
 
-def _handle_general_question(member, text):
-    """Stage 12: answered from DeKUTCU's own materials, with citations -- see rag_companion.py."""
+def _companion(member, text, pastoral):
+    """
+    Follow-ups (BUG-16, Keziah 2026-10-08): while the member is in a companion conversation, the message is
+    first rewritten as a standalone question using the recent conversation ("what about verse 3?" after
+    "Explain Romans 12:2" -> "What does Romans 12:3 mean?"). With no recent companion question, a bare
+    follow-up still gets the "give me the full reference" reply.
+    """
+    rewritten = rag_companion.standalone_question(member, text)
+    if rewritten:
+        return rag_companion.answer_question(member, rewritten, pastoral=pastoral, said=text)
     if _NEEDS_CONTEXT.match(conversation.normalise(text)):
         return ("Could you give me the full reference or topic? For example: \"Explain Romans 12:2\" or "
-                "\"What does the CU believe about baptism?\" -- I read each question on its own, so a short "
-                "follow-up like that doesn't tell me which passage you mean.")
-    return rag_companion.answer_question(member, text, pastoral=False)
+                "\"What does the CU believe about baptism?\" -- a short follow-up like that doesn't tell me "
+                "which passage you mean.")
+    return rag_companion.answer_question(member, text, pastoral=pastoral)
+
+
+def _handle_general_question(member, text):
+    """Stage 12: answered from DeKUTCU's own materials, with citations -- see rag_companion.py."""
+    return _companion(member, text, pastoral=False)
 
 
 def _handle_pastoral_question(member, text):
@@ -598,7 +611,7 @@ def _handle_pastoral_question(member, text):
     offer of a leader -- a deliberate, logged departure from the
     proposal's "route rather than answer" wording. See PROJECT_LOG.md.
     """
-    return rag_companion.answer_question(member, text, pastoral=True)
+    return _companion(member, text, pastoral=True)
 
 
 def _handle_feedback_response(member, text):

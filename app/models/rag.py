@@ -115,6 +115,19 @@ def replace_document(title, tier, source, added_at, chunks):
     return document_id
 
 
+def asked_companion_recently(reg_number, minutes):
+    """Has this member asked the companion something (general or pastoral) in the last `minutes`?"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""SELECT 1 FROM rag_queries WHERE reg_number = %s AND kind IN ('general', 'pastoral')
+                      AND created_at >= (NOW() AT TIME ZONE 'UTC') - (%s * INTERVAL '1 minute') LIMIT 1""",
+                   (reg_number, minutes))
+    found = cursor.fetchone() is not None
+    cursor.close()
+    conn.close()
+    return found
+
+
 def log_query(reg_number, question, kind, severity, retrieved, outcome, answer, cited,
               invalid_citations, tokens_used, created_at):
     conn = get_connection()

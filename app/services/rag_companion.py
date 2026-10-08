@@ -209,11 +209,74 @@ def _generate(question, chunks, pastoral):
     return json.loads(response.choices[0].message.content), tokens
 
 
-def answer_question(member, question, pastoral=False):
+def answer_question(member, question, pastoral=False, said=None):
     """
     The entry point from intent_router -- general_question (pastoral=False)
     or pastoral_question (pastoral=True). Returns the reply text.
+
+    said: the member's own words, when `question` is a follow-up rewritten as a
+    standalone question (standalone_question below). The safety check reads
+    what they actually SAID; the search and the answer use the rewritten
+    question; and the answer opens with how it was understood, so a wrong
+    reading is easy to spot and correct -- never on an urgent-support reply.
     """
+    severity = escalation.assess_severity(said or question)
+    if severity == "acute_risk":
+        log_query(member["reg_number"], question, "pastoral" if pastoral else "general", severity, [], "escalated",
+                  None, [], 0, None, _now())
+        return escalation.escalate_acute(member, "rag_question", said or question)
+    reply = _answer(member, question, pastoral, severity)
+    if said is not None and said.strip().lower() != question.strip().lower():
+        reply = f"(Taking that as: \"{question}\")\n\n{reply}"
+    return reply
+
+
+# Follow-ups (BUG-16, settled with Keziah 2026-10-08): the standard "condense question" /
+# history-aware retrieval pattern -- the recent conversation plus the new message are rewritten
+# into ONE standalone question before searching, because "what about verse 3?" finds nothing
+# useful on its own. Uses the same last-10-messages window as the intent classifier, and only
+# while the member is in a companion conversation (asked it something in the last 30 minutes) --
+# so a fresh question costs nothing extra.
+FOLLOW_UP_MINUTES = 30
+_CONDENSE_PROMPT = (
+    "You rewrite a member's latest message to DeKUTCU's WhatsApp assistant as ONE standalone question that "
+    "makes sense with no conversation before it, using the recent conversation only to fill in what the "
+    "message refers to (a Bible passage, a verse, a topic). A short question that only makes sense as a "
+    "follow-up -- e.g. 'who can vote?' right after a question about exec elections -- needs that topic added "
+    "('Who can vote in the exec elections?'). If the latest message is already a complete question on a NEW "
+    "topic, return it unchanged. Keep the member's meaning and wording as far as possible; "
+    "never answer it, never add a new topic. "
+    'Respond with ONLY a JSON object: {"question": "<the standalone question>"}.'
+)
+
+
+def standalone_question(member, text):
+    """The follow-up rewritten as a standalone question, or None (no recent companion question, or it failed)."""
+    from app.models.rag import asked_companion_recently
+    from app.models.conversation_history import get_recent_conversation
+    if not asked_companion_recently(member["reg_number"], FOLLOW_UP_MINUTES):
+        return None
+    history = get_recent_conversation(member["whatsapp_id"])
+    if not history:
+        return None
+    transcript = "\n".join(f"{'Member' if h['role'] == 'user' else 'Assistant'}: {h['message_text'][:500]}"
+                           for h in history)
+    try:
+        response = create_chat_completion(
+            messages=[{"role": "system", "content": _CONDENSE_PROMPT},
+                      {"role": "user", "content": f"Recent conversation:\n{transcript}\n\nLatest message: {text}"}],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+        rewritten = (json.loads(response.choices[0].message.content).get("question") or "").strip()
+    except Exception as e:
+        print(f"Follow-up rewrite failed: {type(e).__name__}")
+        return None
+    return rewritten if 0 < len(rewritten) <= 300 else None
+
+
+def _answer(member, question, pastoral, severity):
+    """Search DeKUTCU's materials and answer -- everything after the safety check (see answer_question)."""
     kind = "pastoral" if pastoral else "general"
     whatsapp_id = member["whatsapp_id"]
     reg_number = member["reg_number"]
@@ -221,11 +284,6 @@ def answer_question(member, question, pastoral=False):
     def log(severity, outcome, retrieved=None, answer=None, cited=None, invalid=0, tokens=None):
         log_query(reg_number, question, kind, severity, retrieved or [], outcome,
                   answer, cited or [], invalid, tokens, _now())
-
-    severity = escalation.assess_severity(question)
-    if severity == "acute_risk":
-        log(severity, "escalated")
-        return escalation.escalate_acute(member, "rag_question", question)
 
     def leader_question(offer_trigger):
         """

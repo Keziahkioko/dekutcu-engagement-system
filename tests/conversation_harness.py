@@ -20,6 +20,7 @@ Safety:
 Test members are TEST-QA-* rows, removed by cleanup().
 """
 
+import json
 import os
 import re
 import sys
@@ -108,8 +109,35 @@ def fake_is_reason(text):
         r"sick|unwell|clinic|class|cat\b|exam|lab|fare|far|rain|forgot|busy|because|couldn't|didn't|work|travel|nilikuwa class", lowered))
 
 
-def fake_rag_answer(member, question, pastoral=False):
+def fake_rag_answer(member, question, pastoral, severity):
+    """Stands in for rag_companion._answer (search + generation) -- the real answer_question wrapper still runs,
+    so the safety-first check and the "(Taking that as ...)" line are exercised. Logs the query like the real one,
+    so the follow-up window (asked the companion in the last 30 minutes) works."""
+    from app.models.rag import log_query
+    log_query(member["reg_number"], question, "pastoral" if pastoral else "general", severity, [], "answered",
+              "fake", [], 0, None, now_utc())
     return f"[RAG answer to: {question}]"
+
+
+def fake_condense(messages=None, **kwargs):
+    """Stands in for the follow-up rewrite: '... verse N' after a 'Book C:V' question -> 'What does Book C:N mean?'."""
+    content = messages[-1]["content"]
+    latest = content.rsplit("Latest message: ", 1)[1]
+    refs = re.findall(r"Member: .*?\b((?:[1-3] )?[A-Z][a-z]+) (\d+):\d+", content)
+    verse = re.search(r"verse (\d+)", latest.lower())
+    question = f"What does {refs[-1][0]} {refs[-1][1]}:{verse.group(1)} mean?" if refs and verse else latest
+
+    class _Msg:
+        def __init__(self, text):
+            self.content = text
+
+    class _Choice:
+        def __init__(self, text):
+            self.message = _Msg(text)
+
+    class _Resp:
+        choices = [_Choice(json.dumps({"question": question}))]
+    return _Resp()
 
 
 def fake_answer_from_materials(member, question):
@@ -198,7 +226,8 @@ class Harness:
             patch("app.services.reason_capture.classify_reason", fake_classify_reason),
             patch("app.services.reason_capture._is_reason", fake_is_reason),
             patch("app.services.reason_capture.is_reason", fake_is_reason),
-            patch("app.services.rag_companion.answer_question", fake_rag_answer),
+            patch("app.services.rag_companion._answer", fake_rag_answer),
+            patch("app.services.rag_companion.create_chat_completion", fake_condense),   # after the guard: wins
             patch("app.services.rag_companion.answer_from_materials", fake_answer_from_materials),
             patch("app.services.message_generator.generate_arm_message", fake_arm_message),
             patch("app.services.intent_router.answer_group_question", fake_group_question),

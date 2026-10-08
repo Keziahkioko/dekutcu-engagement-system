@@ -1111,6 +1111,35 @@ class BibleFollowUps(unittest.TestCase):
         s = student()
         self.assertIn("[RAG answer", H.say(s, "What does Romans 12:2 mean?"))
 
+    # BUG-16 (Keziah, 2026-10-08): follow-ups are rewritten as standalone questions from the recent conversation.
+    def test_follow_up_is_understood_and_shown(self):
+        s = student()
+        H.say(s, "What does Romans 12:2 mean?")
+        reply = H.say(s, "what about verse 3?")
+        self.assertIn('(Taking that as: "What does Romans 12:3 mean?")', reply)
+        self.assertIn("[RAG answer to: What does Romans 12:3 mean?]", reply, "searched with the full question")
+
+    def test_a_complete_new_question_is_left_alone(self):
+        s = student()
+        H.say(s, "What does Romans 12:2 mean?")
+        reply = H.say(s, "What does the CU believe about baptism?")
+        self.assertNotIn("Taking that as", reply)
+        self.assertIn("[RAG answer to: What does the CU believe about baptism?]", reply)
+
+    def test_after_30_minutes_it_asks_for_the_reference_again(self):
+        s = student()
+        H.say(s, "What does Romans 12:2 mean?")
+        q("UPDATE rag_queries SET created_at = created_at - INTERVAL '1 hour' WHERE reg_number = %s",
+          (member_row(s)["reg_number"],), fetch=False)
+        self.assertIn("full reference or topic", H.say(s, "what about verse 3?"))
+
+    def test_safety_check_reads_what_they_actually_said(self):
+        from app.services import rag_companion
+        s = student()
+        reply = rag_companion.answer_question(member_row(s), "What does Romans 12:3 mean?", said="verse 3 -- I want to end my life")
+        self.assertIn("*1199*", reply, "urgent support, from the member's own words")
+        self.assertNotIn("Taking that as", reply)
+
 
 class Webhook(unittest.TestCase):
     def _post(self, message, secret=None, raw=None):
