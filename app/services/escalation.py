@@ -225,6 +225,20 @@ def _direct_contact():
     return "\n".join(lines)
 
 
+# Help RIGHT NOW, on every urgent (acute_risk) reply -- a student leader may not see the alert for hours
+# (Keziah, 2026-10-08). Checked 2026-10-07: Kenya Red Cross 1199 -- free, 24/7 counselling and emergency
+# response (Kenya Red Cross's own posts, latest its Nairobi branch, April 2024); Befrienders Kenya
+# +254 722 178 177 -- suicide prevention by call/SMS/WhatsApp, Mon-Fri 9am-5pm (LifeLine International
+# member listing); 999 / 112 -- national emergency numbers. Left out: Niskize 0900 620 800 (a premium-rate
+# "0900" number -- it costs the caller) and an "EMKF 0800 723 253" line one directory lists but another
+# marks incorrect. Re-check these numbers (ideally ring 1199) before going live, and each year.
+CRISIS_LINES = (
+    "If you're in danger right now or might act on these thoughts, please call the Kenya Red Cross on "
+    "*1199* (free, 24 hours) or *999 / 112* for emergencies. You can also call, SMS or WhatsApp "
+    "Befrienders Kenya on *0722 178 177* (weekdays 9am-5pm)."
+)
+
+
 def escalate_acute(member, trigger_type, context_text):
     """For acute_risk -- escalates regardless of consent, always transparently, and ALWAYS again even if recent."""
     _case_id, targets = _notify_leaders(member, trigger_type, context_text, "may need urgent support", acute=True)
@@ -233,18 +247,18 @@ def escalate_acute(member, trigger_type, context_text):
         return (
             "What you're describing sounds really serious. Because of that, I've "
             f"already let {who} know so they can reach out and support you "
-            "as soon as possible."
+            f"as soon as possible.\n\n{CRISIS_LINES}"
         )
     contact = _direct_contact()
     if contact:
         return (
             "What you're describing sounds really serious, and I want to make sure you get real "
             "support right away. I couldn't reach a leader through me just now -- please contact "
-            f"DeKUTCU directly as soon as you can:\n{contact}"
+            f"DeKUTCU directly as soon as you can:\n{contact}\n\n{CRISIS_LINES}"
         )
     return (
         "What you're describing sounds really serious, and I want to make sure you "
-        "get real support -- please reach out to a leader directly as soon as you can."
+        f"get real support -- please reach out to a leader directly as soon as you can.\n\n{CRISIS_LINES}"
     )
 
 

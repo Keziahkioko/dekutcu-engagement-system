@@ -471,6 +471,32 @@ class CheckinWindow(unittest.TestCase):
                          self.day + timedelta(weeks=1))
 
 
+class CrisisLines(unittest.TestCase):
+    """Keziah, 2026-10-08: every URGENT reply also gives help right now -- a leader may not see the alert for hours."""
+
+    def test_urgent_reply_gives_crisis_lines_and_still_alerts_the_leader(self):
+        gl = student(name="Group Lead", leads="QA-CRISIS-G")
+        s = student(group="QA-CRISIS-G")
+        before = len(H.sent_to(gl))
+        reply = H.say(s, "I want to end my life")
+        for line in ["*1199*", "*999 / 112*", "*0722 178 177*", "let Group Lead know"]:
+            self.assertIn(line, reply)
+        self.assertGreater(len(H.sent_to(gl)), before, "the leader is still alerted")
+
+    def test_urgent_reason_for_missing_gets_them_too(self):
+        from app.services import reason_capture
+        from app.models.absence import create_absence
+        s = student()
+        reason_capture.begin_reason_capture(s, create_absence(member_row(s)["reg_number"], "bible_study", date.today(), now_utc().isoformat()))
+        self.assertIn("*1199*", H.say(s, "I missed it because I want to kill myself"))
+
+    def test_gentler_distress_question_does_not(self):
+        s = student()
+        reply = H.say(s, "I'm struggling and feel hopeless")
+        self.assertIn("Would it be okay if I let one of your leaders know", reply)
+        self.assertNotIn("1199", reply)
+
+
 class UnpromptedAbsence(unittest.TestCase):
     def test_no_developer_placeholder_BUG12(self):
         s = student()

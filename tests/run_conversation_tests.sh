@@ -11,7 +11,7 @@ TEST_SETS=(
   "EventCreation Registration"
   "FellowshipCheckin CheckinWindow Webhook BibleFollowUps"
   "Fuzz"
-  "Announcements"
+  "Announcements CrisisLines"
   "NumberChange"
   # One set, run in order: the current study guide and the Guides Coordinator are single,
   # database-wide positions, so these classes must never run side by side.
