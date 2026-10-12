@@ -68,6 +68,10 @@ def init_absences_table():
     # never fed back into the live posterior update. See bandit.py.
     cursor.execute("ALTER TABLE absences ADD COLUMN IF NOT EXISTS is_control BOOLEAN")
     cursor.execute("ALTER TABLE absences ADD COLUMN IF NOT EXISTS recovered_within_2 BOOLEAN")
+    # Fairer outcomes (Keziah, 2026-10-12): an outcome is only known from an "I was there" or a recorded
+    # absence -- a member who simply didn't reply is UNKNOWN, left out of learning and results.
+    cursor.execute("ALTER TABLE absences ADD COLUMN IF NOT EXISTS outcome_unknown BOOLEAN NOT NULL DEFAULT FALSE")
+    cursor.execute("ALTER TABLE absences ADD COLUMN IF NOT EXISTS recovery_unknown BOOLEAN NOT NULL DEFAULT FALSE")
     conn.commit()
     cursor.close()
     conn.close()
@@ -224,7 +228,7 @@ def get_absences_awaiting_reward(cutoff_date):
     cursor = conn.cursor()
     cursor.execute("""
         SELECT * FROM absences
-        WHERE chosen_arm IS NOT NULL AND reward IS NULL AND activity_date <= %s
+        WHERE chosen_arm IS NOT NULL AND reward IS NULL AND NOT outcome_unknown AND activity_date <= %s
           AND reg_number NOT LIKE %s
     """, (cutoff_date, ANON_PREFIX + "%"))
     rows = cursor.fetchall()
@@ -244,8 +248,8 @@ def get_absences_awaiting_recovery(cutoff_date):
     cursor = conn.cursor()
     cursor.execute("""
         SELECT * FROM absences
-        WHERE reward IS NOT NULL AND recovered_within_2 IS NULL AND activity_date <= %s
-          AND reg_number NOT LIKE %s
+        WHERE (reward IS NOT NULL OR outcome_unknown) AND recovered_within_2 IS NULL AND NOT recovery_unknown
+          AND activity_date <= %s AND reg_number NOT LIKE %s
     """, (cutoff_date, ANON_PREFIX + "%"))
     rows = cursor.fetchall()
     cursor.close()
@@ -257,6 +261,17 @@ def set_recovered_within_2(absence_id, recovered):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("UPDATE absences SET recovered_within_2 = %s WHERE id = %s", (recovered, absence_id))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+def mark_outcome_unknown(absence_id, which):
+    """which: 'outcome' (the next session) or 'recovery' (within two sessions) -- nobody can tell; see bandit.py."""
+    column = {"outcome": "outcome_unknown", "recovery": "recovery_unknown"}[which]
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"UPDATE absences SET {column} = TRUE WHERE id = %s", (absence_id,))
     conn.commit()
     cursor.close()
     conn.close()

@@ -65,6 +65,7 @@ from app.models.absence import (
     get_absences_awaiting_recovery,
     set_recovered_within_2,
     absence_exists_for_date,
+    mark_outcome_unknown,
 )
 from app.models.bandit_posterior import get_posterior, update_posterior
 from app.models.member import get_bandit_control_group, set_bandit_control_group
@@ -79,6 +80,36 @@ _CONTROL_GROUP_FRACTION = 0.15
 
 _REWARD_DELAY_DAYS = 7  # every tracked activity is weekly
 _RECOVERY_DELAY_DAYS = 14  # two weekly occurrences out
+# A late "I was there" still counts (check-in questions stay open until the next check-in), so a session
+# with no answer is only declared UNKNOWN this many days after it -- just before the next check-in.
+_WAIT_FOR_LATE_ANSWER_DAYS = 6
+
+
+def attended_on(reg_number, activity_type, day):
+    """
+    True / False / None (unknown) -- Keziah, 2026-10-12. Used to be "no absence recorded = attended", which
+    turned every member who simply stopped replying into a SUCCESS for the strategy that was tried. Now:
+      - an absence recorded for that day -> False;
+      - they said "I was there" (a check-in, incl. self-reported Bible Study) -> True;
+      - Bible Study marked by their group leader, and they weren't marked absent -> True;
+      - otherwise -> None: nobody can tell, so it's left out of the learning and the results.
+    """
+    from app.models.fellowship_checkin import count_checkins_on_dates
+    from app.models.attendance_marking import marking_exists
+    from app.models.member import get_member_by_reg_number
+    if absence_exists_for_date(reg_number, activity_type, day):
+        return False
+    if count_checkins_on_dates(reg_number, activity_type, [day]):
+        return True
+    if activity_type == "bible_study":
+        member = get_member_by_reg_number(reg_number)
+        if member and member["group_label"] and marking_exists(member["group_label"], day):
+            return True
+    return None
+
+
+def _still_waiting(day):
+    return date.today() < day + timedelta(days=_WAIT_FOR_LATE_ANSWER_DAYS)
 
 
 def _miss_bucket(consecutive_misses):
@@ -139,13 +170,13 @@ def compute_pending_rewards():
     """
     Scheduled daily task -- for every absence with a chosen arm but no
     reward yet, where the next weekly occurrence of that same activity
-    has already passed, checks whether a NEW absence exists for that
-    same person+activity on that next date. No new absence = presumed
-    attended = reward 1. Another absence = reward 0 -- a proxy, not a
-    perfect ground truth, but it's exactly the same attendance signal
-    Stage 7 already relies on for that activity type (leader-confirmed
-    for Bible Study, check-in/silence-inferred for fellowships), not a
-    new, separately-trusted mechanism.
+    has already passed, checks whether they ATTENDED that next session
+    (attended_on): said "I was there" or weren't marked absent by their
+    group leader = reward 1; an absence = reward 0. No answer at all =
+    UNKNOWN (since 2026-10-12, Keziah) -- it used to count as attended,
+    which made every member who stopped replying a success for the
+    strategy tried. Unknown outcomes are waited on for a late answer,
+    then left out of the learning and the results.
 
     Control-group absences (see module docstring) still get their
     reward computed and recorded -- their outcomes are exactly what
@@ -157,7 +188,11 @@ def compute_pending_rewards():
     cutoff = date.today() - timedelta(days=_REWARD_DELAY_DAYS)
     for absence in get_absences_awaiting_reward(cutoff):
         next_date = absence["activity_date"] + timedelta(days=_REWARD_DELAY_DAYS)
-        reward = not absence_exists_for_date(absence["reg_number"], absence["activity_type"], next_date)
+        reward = attended_on(absence["reg_number"], absence["activity_type"], next_date)
+        if reward is None:
+            if not _still_waiting(next_date):
+                mark_outcome_unknown(absence["id"], "outcome")   # never learned from; not in the results
+            continue
         set_reward(absence["id"], reward)
         if not absence["is_control"]:
             update_posterior(absence["context_key"], absence["chosen_arm"], reward)
@@ -180,8 +215,13 @@ def _compute_pending_recovery():
     cutoff = date.today() - timedelta(days=_RECOVERY_DELAY_DAYS)
     for absence in get_absences_awaiting_recovery(cutoff):
         if absence["reward"]:
-            recovered = True
-        else:
-            second_date = absence["activity_date"] + timedelta(days=_RECOVERY_DELAY_DAYS)
-            recovered = not absence_exists_for_date(absence["reg_number"], absence["activity_type"], second_date)
-        set_recovered_within_2(absence["id"], recovered)
+            set_recovered_within_2(absence["id"], True)
+            continue
+        second_date = absence["activity_date"] + timedelta(days=_RECOVERY_DELAY_DAYS)
+        second = attended_on(absence["reg_number"], absence["activity_type"], second_date)
+        if second is True:
+            set_recovered_within_2(absence["id"], True)
+        elif second is False and absence["reward"] is False:
+            set_recovered_within_2(absence["id"], False)       # known to have missed BOTH sessions
+        elif not _still_waiting(second_date):
+            mark_outcome_unknown(absence["id"], "recovery")    # a gap in what we know -- not counted either way

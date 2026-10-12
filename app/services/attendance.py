@@ -47,8 +47,12 @@ def send_bible_study_nudges():
     """
     The scheduled Tuesday-9pm task (see scheduler.py) -- messages every
     leader currently matched to a specific Bible Study group, asking
-    who was absent.
+    who was absent. Not sent during the pilot (BIBLE_STUDY_SELF_REPORT -- members report themselves; see
+    fellowship_checkin.bible_study_self_report), so nobody is counted twice.
     """
+    from app.services.fellowship_checkin import bible_study_self_report
+    if bible_study_self_report():
+        return
     members = get_data_consenting_members()
     leaders = [m for m in members if m["leads_group_label"] and m["whatsapp_id"]]
 

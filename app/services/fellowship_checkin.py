@@ -47,6 +47,7 @@ Live replies are handled immediately, never batched:
     would be redundant.
 """
 
+import os
 import re
 from datetime import datetime, timezone, date, timedelta
 
@@ -83,12 +84,24 @@ _UNTRACKED_DAYS = {
     6: "sunday_service",
 }
 
-_TRACKED_ACTIVITIES = set(_DAYS.values())
+# Pilot setting (Keziah, 2026-10-12): the ~50-volunteer pilot has no Bible Study groups, so no group
+# leader can mark attendance -- with BIBLE_STUDY_SELF_REPORT=true each member gets "Were you at Bible
+# Study today?" on Tuesday like a fellowship check-in, and the group leaders' "who was absent?" question
+# is switched off (attendance.send_bible_study_nudges), so nobody is ever counted twice. Off (the
+# default): Bible Study is marked by group leaders, as designed for a full rollout with real groups.
+_BIBLE_STUDY_WEEKDAY = 1   # Tuesday
+
+
+def bible_study_self_report():
+    return os.getenv("BIBLE_STUDY_SELF_REPORT", "").strip().lower() == "true"
+
+
+_TRACKED_ACTIVITIES = set(_DAYS.values()) | {"bible_study"}
 
 # Public -- so app/__init__.py can register the 9pm task for each
 # tracked day without reaching into _DAYS directly. Sunday is
 # deliberately NOT here: no 9pm fallback for it.
-TRACKED_WEEKDAYS = list(_DAYS.keys())
+TRACKED_WEEKDAYS = list(_DAYS.keys()) + [_BIBLE_STUDY_WEEKDAY]   # Tuesday's only sends when the pilot setting is on
 
 _YES_VARIANTS = {"yes", "yeah", "yep", "yup"}
 _BARE_NO_VARIANTS = {"no", "nope", "nah"}
@@ -106,6 +119,8 @@ def _today():
 
 
 def _activity_for_weekday(weekday):
+    if weekday == _BIBLE_STUDY_WEEKDAY and bible_study_self_report():
+        return "bible_study"
     return _DAYS.get(weekday) or _UNTRACKED_DAYS.get(weekday)
 
 
@@ -138,6 +153,8 @@ def send_fellowship_checkin(weekday, triggered_by="scheduled"):
     """
     activity_type = _activity_for_weekday(weekday)
     today = _today()
+    if activity_type is None:
+        return None   # e.g. Tuesday with Bible Study marked by group leaders (the pilot setting is off)
 
     if not claim_checkin_broadcast(activity_type, today, triggered_by, _now()):
         return None

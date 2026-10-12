@@ -42,3 +42,15 @@ def record_marking(group_label, activity_date, roster_size, absent_count, marked
     conn.commit()
     cursor.close()
     conn.close()
+
+
+def marking_exists(group_label, activity_date):
+    """Did this group's leader mark Bible Study attendance for that date? (bandit.attended_on)"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM attendance_markings WHERE group_label = %s AND activity_date = %s LIMIT 1",
+                   (group_label, activity_date))
+    found = cursor.fetchone() is not None
+    cursor.close()
+    conn.close()
+    return found
