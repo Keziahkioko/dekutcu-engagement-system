@@ -166,9 +166,9 @@ def create_app():
     # Sunday 08:00 -- the weekly summary to every exec leader (Keziah's timing).
     register_task("weekly_leadership_digest", weekday=6, hour=8, func=send_weekly_digest)
 
-    # Every scheduler check (~5 minutes) -- reminds and then escalates any
-    # escalation case nobody has claimed; acute risk can't wait for an
-    # hourly slot. See escalation.follow_up_unclaimed_cases.
+    # Every scheduler check (hourly; every 5 minutes for 2.5 hours after an urgent case
+    # opens -- see scheduler.check_often_for) -- reminds and then escalates any
+    # escalation case nobody has claimed. See escalation.follow_up_unclaimed_cases.
     register_every_check_task("follow_up_unclaimed_escalations", follow_up_unclaimed_cases)
     # Completes a consent withdrawal that had to wait for an open acute case to
     # be claimed (and any made before anonymising existed). See withdrawal.py.
@@ -182,6 +182,10 @@ def create_app():
     register_every_check_task("check_number_changes", check_number_changes)
     # Batches of guides a leader hasn't confirmed: reminder at 24h, Coordinator alerted at 3 days.
     register_every_check_task("check_unconfirmed_batches", check_unconfirmed_batches)
+    # Safety net for the message workers, which now wait for a signal instead of polling the
+    # database every half second (Neon compute, 2026-10-12): pick up anything still queued.
+    from app.routes.webhook import wake_workers
+    register_every_check_task("wake_message_workers", wake_workers)
 
     if run_workers:
         start_scheduler()

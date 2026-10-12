@@ -25,11 +25,18 @@ from app.models.scheduled_task_run import get_last_run_date, mark_task_run
 
 NAIROBI = ZoneInfo("Africa/Nairobi")
 
-_CHECK_INTERVAL_SECONDS = 300  # 5 minutes -- hour-level precision is enough, nothing finer is needed
+# How often to check (Keziah, 2026-10-12 -- Neon free-plan compute): every check touches the database,
+# and Neon only sleeps after 5 quiet minutes, so the old 5-minute rhythm alone kept it awake around the
+# clock. Now: just after each hour (the daily tasks only need the hour), and every 5 minutes ONLY while
+# something time-critical is waiting -- an urgent care case (30-minute reminder, 2-hour backstop) or an
+# M-Pesa prompt (2-minute double-check) -- see check_often_for(). A normal case's 2-hour reminder can
+# therefore arrive up to an hour late (2-3 hours); urgent cases are unaffected.
+_FAST_SECONDS = 300
+_fast_until = [0.0]   # time.time() until which checks run every _FAST_SECONDS
 
 _tasks = []  # (name, weekday, hour, func) -- weekday: Monday=0 ... Sunday=6 (matching date.weekday()), or None for "every day"
 
-# Stage 13: tasks that run on EVERY check (every _CHECK_INTERVAL_SECONDS),
+# Stage 13: tasks that run on EVERY check (hourly, or every 5 minutes while busy),
 # not at a fixed hour -- first needed for following up unclaimed
 # escalations, where acute risk can't wait for the next hour's slot. They
 # must be safe to run repeatedly: they track their own progress (e.g.
@@ -43,8 +50,21 @@ def register_task(name, weekday, hour, func):
 
 
 def register_every_check_task(name, func):
-    """Runs on every scheduler check (every few minutes). func must be safe to repeat."""
+    """Runs on every scheduler check (hourly, or every 5 minutes while busy). func must be safe to repeat."""
     _every_check_tasks.append((name, func))
+
+
+def check_often_for(minutes):
+    """Check every 5 minutes for the next `minutes` -- called when something time-critical starts."""
+    _fast_until[0] = max(_fast_until[0], time.time() + minutes * 60)
+
+
+def _seconds_until_next_check(now_ts=None):
+    now_ts = time.time() if now_ts is None else now_ts
+    if now_ts < _fast_until[0]:
+        return _FAST_SECONDS
+    # Just after the next hour begins (1 minute in), so each hour's slot is visited once and none skipped.
+    return 3600 - (now_ts % 3600) + 60
 
 
 def _run_due_tasks():
@@ -78,7 +98,7 @@ def _scheduler_loop():
             _run_due_tasks()
         except Exception as e:
             print(f"Scheduler loop error: {e}")
-        time.sleep(_CHECK_INTERVAL_SECONDS)
+        time.sleep(_seconds_until_next_check())
 
 
 def start_scheduler():

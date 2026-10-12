@@ -218,6 +218,9 @@ def _notify_leaders(member, trigger_type, context_text, urgency_label, acute=Fal
 
     case_id = create_case(member["reg_number"], trigger_type, context_text, _now(),
                           urgency="acute" if acute else "normal")
+    if acute:   # the 30-minute reminder and 2-hour backstop need 5-minute checks, not hourly ones
+        from app.services.scheduler import check_often_for
+        check_often_for(150)
 
     for whatsapp_id, name, leader_reg_number in targets:
         notification = f"{member['name']} {urgency_label}"

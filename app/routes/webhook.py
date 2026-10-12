@@ -102,6 +102,19 @@ _NUM_WORKERS = 3
 _BACKLOG_FILLER_THRESHOLD = 3
 _FILLER_REPLY = "Got your message! I'm a little busy right now -- give me a moment and I'll get back to you."
 
+# Neon free-plan compute (Keziah, 2026-10-12, at 84% of the month's 100 hours on day 12): the workers used
+# to ask the database "anything new?" every half second, so it never got the 5 quiet minutes it needs to
+# sleep -- ~186 compute-hours a month, and the whole database is suspended once the allowance runs out.
+# Now an idle worker waits on a signal and makes NO database queries: the webhook wakes the workers the
+# moment it queues a message, and the scheduler wakes them on each of its runs as a safety net (a message
+# queued just before a restart, say).
+_wake_signals = [threading.Event() for _ in range(_NUM_WORKERS)]
+
+
+def wake_workers():
+    for signal in _wake_signals:
+        signal.set()
+
 
 def _process_queue_shard(shard_index):
     """
@@ -119,10 +132,12 @@ def _process_queue_shard(shard_index):
     do that under the old per-request model, where each request was
     independent.
     """
+    signal = _wake_signals[shard_index]
     while True:
+        signal.clear()   # BEFORE looking: a message queued after this point sets it again, so none is missed
         message = claim_next_message(shard_index, _NUM_WORKERS)
         if message is None:
-            time.sleep(0.5)
+            signal.wait()
             continue
         try:
             reply_text = route_incoming_message(message["sender_number"], message["message_text"])
@@ -215,6 +230,7 @@ def _accept_message(message):
         return
     message_text = message["text"]["body"]
     backlog_count = enqueue_message(sender_number, message_text)
+    wake_workers()
     if backlog_count >= _BACKLOG_FILLER_THRESHOLD:
         send_whatsapp_message(to_number=sender_number, message_text=_FILLER_REPLY)
 

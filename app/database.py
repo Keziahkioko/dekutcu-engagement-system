@@ -44,8 +44,9 @@ quiet, which nothing retries. So get_connection() now checks a
 connection with a tiny SELECT 1 before handing it out -- but ONLY if it
 has sat idle longer than _IDLE_CHECK_SECONDS (or has never been used),
 which is exactly when it could have gone stale. Connections in constant
-use (the message workers poll every half-second) never pay for the
-check. Dead ones are discarded and the pool opens fresh ones in their
+use (a burst of messages) never pay for the check. (Since 2026-10-12 idle
+connections are also CLOSED after two minutes so Neon can sleep -- see
+_CLOSE_IDLE_AFTER_SECONDS.) Dead ones are discarded and the pool opens fresh ones in their
 place. close() likewise discards a connection that broke mid-use instead
 of crashing while trying to return it.
 """
@@ -61,6 +62,15 @@ _pool = None
 _pool_lock = threading.Lock()
 
 _IDLE_CHECK_SECONDS = 60
+
+# Neon free-plan compute (Keziah, 2026-10-12): OPEN idle connections also keep Neon awake, and the pool
+# used to hold every connection open forever -- so even with no queries the database never slept. A
+# small background thread now closes any connection that has sat unused in the pool for longer than
+# _CLOSE_IDLE_AFTER_SECONDS (closing sends no query). During a burst of messages connections are reused
+# (fast); after a quiet couple of minutes they're all closed, and five minutes later Neon can sleep.
+# The first message after a quiet spell pays for a fresh connection (and Neon waking) -- about a second.
+_CLOSE_IDLE_AFTER_SECONDS = 120
+_REAP_EVERY_SECONDS = 30
 
 # id(connection) -> time.monotonic() it was last returned to the pool.
 # A connection missing from here has never been handed out yet (e.g.
@@ -99,6 +109,7 @@ def _get_pool():
                     minconn=6, maxconn=10, dsn=database_url, cursor_factory=RealDictCursor,
                     connect_timeout=15, keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
                 )
+                threading.Thread(target=_close_idle_connections_forever, args=(_pool,), daemon=True).start()
     return _pool
 
 
@@ -139,6 +150,40 @@ class _PooledConnection:
             _last_used[id(self._conn)] = time.monotonic()
         except (psycopg2.OperationalError, psycopg2.InterfaceError):
             _discard(self._pool, self._conn)
+
+
+def _close_idle_connections(p, now=None):
+    """
+    Closes pooled connections nobody has used for _CLOSE_IDLE_AFTER_SECONDS. Works on the pool's list of
+    AVAILABLE connections only (psycopg2's ThreadedConnectionPool keeps them in p._pool, guarded by
+    p._lock) -- a connection someone is using is never touched. Returns how many it closed.
+    """
+    now = time.monotonic() if now is None else now
+    closed = 0
+    with p._lock:
+        for conn in list(p._pool):
+            last = _last_used.get(id(conn))
+            if last is None:
+                _last_used[id(conn)] = now   # pre-warmed at boot, never used: start its idle clock now
+                continue
+            if now - last >= _CLOSE_IDLE_AFTER_SECONDS:
+                p._pool.remove(conn)
+                _last_used.pop(id(conn), None)
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                closed += 1
+    return closed
+
+
+def _close_idle_connections_forever(p):
+    while True:
+        time.sleep(_REAP_EVERY_SECONDS)
+        try:
+            _close_idle_connections(p)
+        except Exception as e:
+            print(f"Closing idle database connections failed: {e}")
 
 
 def _discard(p, real_conn):

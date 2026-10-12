@@ -54,6 +54,8 @@ def start_payment(member, guide, phone):
         settle_purchase(purchase["id"], "failed", None, f"prompt not sent: {e}"[:200], None, _now())
         raise
     attach_checkout(purchase["id"], ids["checkout_request_id"], ids["merchant_request_id"])
+    from app.services.scheduler import check_often_for
+    check_often_for(30)   # the 2-minute double-check with Safaricom needs 5-minute checks for a while
     return get_purchase(purchase["id"])
 
 
