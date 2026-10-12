@@ -40,6 +40,10 @@ TIER = "bible"
 SOURCE = "corpus/bsb.txt from bereanbible.com -- public domain since 30 April 2023 (berean.bible/terms.htm)"
 VERSES_PER_PASSAGE = 5
 BATCH = 50
+# Cloudflare's free allowance (10,000 "neurons" a day, reset at midnight UTC) ALSO embeds every live companion
+# question -- the first run used all of it and live questions failed until the reset (2026-10-12). Each passage
+# costs ~2 neurons, so a run is capped at 2,500 passages (~half the allowance), leaving plenty for the live bot.
+MAX_PER_RUN = 2500
 
 
 def read_verses():
@@ -86,11 +90,13 @@ def _cached():
     return vectors
 
 
-def embed_missing(passages):
+def embed_missing(passages, limit=MAX_PER_RUN):
     from app.services.embeddings import embed_passages
     done = _cached()
-    todo = [(c, t) for c, t in passages if c not in done]
-    print(f"{len(done)} of {len(passages)} passages already embedded; {len(todo)} to go.")
+    remaining = [(c, t) for c, t in passages if c not in done]
+    todo = remaining[:limit]
+    print(f"{len(done)} of {len(passages)} passages already embedded; {len(remaining)} to go -- "
+          f"embedding {len(todo)} this run (cap {limit}, to leave Cloudflare's allowance for the live bot).")
     with open(CACHE_PATH, "a", encoding="utf-8") as out:
         for start in range(0, len(todo), BATCH):
             batch = todo[start:start + BATCH]
@@ -105,6 +111,9 @@ def embed_missing(passages):
             out.flush()
             if (start // BATCH) % 20 == 0:
                 print(f"  ... {len(done) + start + len(batch)} of {len(passages)}")
+    if len(todo) < len(remaining):
+        print(f"Stopped at this run's cap -- {len(remaining) - len(todo)} left; run --embed again tomorrow.")
+        return False
     print("Complete -- every passage is embedded. Next: --load")
     return True
 
@@ -114,6 +123,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verses", action="store_true", help="load the verse table (for lookup)")
     parser.add_argument("--embed", action="store_true", help="embed the passages not yet embedded")
+    parser.add_argument("--limit", type=int, default=MAX_PER_RUN, help="most passages to embed in one run")
     parser.add_argument("--load", action="store_true", help="store the embedded passages for meaning-search")
     args = parser.parse_args()
 
@@ -133,7 +143,7 @@ def main():
         replace_all_verses(rows)
         print(f"Stored {len(rows)} verses in bible_verses.")
     if args.embed:
-        embed_missing(passages)
+        embed_missing(passages, args.limit)
     if args.load:
         vectors = _cached()
         missing = [c for c, _ in passages if c not in vectors]
