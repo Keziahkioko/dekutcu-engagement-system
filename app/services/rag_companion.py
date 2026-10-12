@@ -52,6 +52,14 @@ from app.services import escalation
 
 RAG_MODEL = "openai/gpt-oss-120b"
 TOP_K = 8
+# The Bible (2026-10-12, Keziah): ~6,000 passages next to the constitution's 95, so they are searched
+# SEPARATELY -- DeKUTCU's own materials keep their TOP_K places and the Bible gets its own few, so loose
+# verses can never crowd out the doctrinal basis. A reference the member names ("Romans 12:2") is looked
+# up exactly (bible_refs + bible_verses) rather than left to meaning-search.
+TOP_K_BIBLE = 4
+_OWN_TIERS = ("constitution", "supporting", "dekutcu")
+_CONTEXT_VERSES = 2        # verses either side of a named verse, so it's explained in context
+_MAX_LOOKUP_VERSES = 40    # a whole chapter is capped (Psalm 119 has 176)
 
 # Small-to-big retrieval, for the doctrinal basis only: it's searched as
 # 11 separate clauses (precise matching), but if ANY clause is retrieved
@@ -80,7 +88,7 @@ Rules:
 3. Set "covered" to false if the passages do not actually answer the question. Passages that are merely on a related topic do not count.
 4. DeKUTCU is non-denominational. If the question is about an issue its doctrinal basis does not settle -- such as the mode or timing of baptism, church government, or spiritual gifts -- set "secondary_issue" to true and do not take a position.
 5. For questions about salvation, base the answer on the doctrinal basis clauses about redemption and justification, and present salvation as DeKUTCU's doctrinal basis does: God's work, by His grace alone, received through faith -- never as something a person achieves by their own declaration, decision or effort.
-6. Passages marked "Supporting source" are not DeKUTCU's own position; if you rely on one, say so ("a supporting source explains...").
+6. Passages marked "Supporting source" are not DeKUTCU's own position; if you rely on one, say so ("a supporting source explains..."). Passages marked "Bible (BSB)" are Scripture: you may quote them and explain what they say in their context, naming the reference (e.g. "Romans 12:2 says..."), but do not add teaching, applications or doctrine the verses themselves do not state. For what DeKUTCU believes, its doctrinal basis is the authority; and on the secondary issues in rule 4, do not take sides even if verses are quoted.
 7. Keep the answer short and warm: 2-4 sentences of plain WhatsApp text, no markdown, no headings. Never mention passage numbers, article numbers or the word "passage" in the answer -- sources are added automatically from the "sources" list.{pastoral_rule}
 
 Respond with ONLY a JSON object:
@@ -153,20 +161,26 @@ _IN_SENTENCE_ARTICLE_REF = re.compile(
 )
 
 
+_LABELS = {"supporting": "Supporting source", "bible": "Bible (BSB)"}
+
+
 def _format_passages(chunks):
     lines = []
     for i, chunk in enumerate(chunks, start=1):
-        label = "Supporting source" if chunk["tier"] == "supporting" else "DeKUTCU's own"
+        label = _LABELS.get(chunk["tier"], "DeKUTCU's own")
         lines.append(f"[{i}] ({label}) {chunk['citation']}\n{chunk['content']}")
     return "\n\n".join(lines)
 
 
 def _source_line(cited_chunks):
-    own = [c["citation"] for c in cited_chunks if c["tier"] != "supporting"]
+    own = [c["citation"] for c in cited_chunks if c["tier"] not in ("supporting", "bible")]
+    scripture = [c["citation"] for c in cited_chunks if c["tier"] == "bible"]
     supporting = [c["citation"] for c in cited_chunks if c["tier"] == "supporting"]
     lines = []
     if own:
         lines.append(("Source: " if len(own) == 1 else "Sources: ") + "; ".join(own))
+    if scripture:
+        lines.append("Scripture: " + "; ".join(scripture))
     if supporting:
         lines.append("Supporting source (not DeKUTCU's official position): " + "; ".join(supporting))
     return "\n".join(lines)
@@ -194,6 +208,36 @@ def _expand_doctrinal_basis(chunks):
         else:
             expanded.append(c)
     return expanded
+
+
+def _lookup_chunks(question):
+    """Passages the member NAMED, looked up exactly (at most two references), each with a little context."""
+    from app.services.bible_refs import find_references, citation
+    from app.models.bible import get_verses
+    chunks = []
+    for book, chapter, first, last in find_references(question)[:2]:
+        if first is None:
+            verses = get_verses(book, chapter)[:_MAX_LOOKUP_VERSES]
+        else:
+            verses = get_verses(book, chapter, max(1, first - _CONTEXT_VERSES), last + _CONTEXT_VERSES)
+        if not verses:
+            continue          # no such chapter/verse ("Romans 99:99") -- nothing to look up
+        shown_first, shown_last = verses[0]["verse"], verses[-1]["verse"]
+        cite = citation(book, chapter, shown_first, shown_last) if first is not None or len(verses) == _MAX_LOOKUP_VERSES             else citation(book, chapter, None, None)
+        text = " ".join(f"{v['verse']} {v['text']}" for v in verses)
+        chunks.append({"id": None, "citation": cite, "content": f"{cite.replace(' (BSB)', '')}. {text}",
+                       "title": "Berean Standard Bible (BSB)", "tier": "bible", "similarity": None})
+    return chunks
+
+
+def _retrieve(question):
+    """Named passages first, then DeKUTCU's own materials (doctrinal basis kept whole), then the Bible's closest."""
+    embedding = embed_query(_search_text(question))
+    own = _expand_doctrinal_basis(nearest_chunks(embedding, TOP_K, tiers=_OWN_TIERS))
+    named = _lookup_chunks(question)
+    seen = {c["citation"] for c in named}
+    bible = [c for c in nearest_chunks(embedding, TOP_K_BIBLE, tiers=("bible",)) if c["citation"] not in seen]
+    return named + own + bible
 
 
 def _generate(question, chunks, pastoral):
@@ -298,7 +342,7 @@ def _answer(member, question, pastoral, severity):
         return escalation.start_leader_offer(whatsapp_id, offer_trigger, question)
 
     try:
-        chunks = _expand_doctrinal_basis(nearest_chunks(embed_query(_search_text(question)), TOP_K))
+        chunks = _retrieve(question)
         retrieved = [{"citation": c["citation"],
                       "similarity": None if c["similarity"] is None else round(float(c["similarity"]), 4)}
                      for c in chunks]
@@ -356,7 +400,7 @@ def answer_from_materials(member, question):
                   answer, cited or [], invalid, tokens, _now())
 
     try:
-        chunks = _expand_doctrinal_basis(nearest_chunks(embed_query(_search_text(question)), TOP_K))
+        chunks = _retrieve(question)
         retrieved = [{"citation": c["citation"],
                       "similarity": None if c["similarity"] is None else round(float(c["similarity"]), 4)}
                      for c in chunks]

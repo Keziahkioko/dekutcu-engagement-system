@@ -31,6 +31,8 @@ only if the corpus grows into the thousands.
 
 import json
 
+from psycopg2.extras import execute_values
+
 from app.database import get_connection
 
 EMBEDDING_DIMENSIONS = 1024  # bge-large-en-v1.5
@@ -44,7 +46,7 @@ def init_rag_tables():
         CREATE TABLE IF NOT EXISTS rag_documents (
             id SERIAL PRIMARY KEY,
             title TEXT UNIQUE NOT NULL,
-            tier TEXT NOT NULL CHECK (tier IN ('constitution', 'supporting')),
+            tier TEXT NOT NULL,
             source TEXT,
             added_at TIMESTAMP
         )
@@ -58,6 +60,12 @@ def init_rag_tables():
             embedding vector({EMBEDDING_DIMENSIONS}) NOT NULL
         )
     """)
+    # Tiers (2026-10-12): 'constitution' -- DeKUTCU's own, the authority; 'bible' -- Scripture (the BSB);
+    # 'supporting' -- a vetted outside source, always labelled; 'dekutcu' -- DeKUTCU's own practical
+    # information (reserved for the planned FAQ). The old two-value check is replaced on every start.
+    cursor.execute("ALTER TABLE rag_documents DROP CONSTRAINT IF EXISTS rag_documents_tier_check")
+    cursor.execute("""ALTER TABLE rag_documents ADD CONSTRAINT rag_documents_tier_check
+                      CHECK (tier IN ('constitution', 'supporting', 'bible', 'dekutcu'))""")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS rag_queries (
             id SERIAL PRIMARY KEY,
@@ -100,11 +108,11 @@ def replace_document(title, tier, source, added_at, chunks):
             VALUES (%s, %s, %s, %s) RETURNING id
         """, (title, tier, source, added_at))
         document_id = cursor.fetchone()["id"]
-        for citation, content, embedding in chunks:
-            cursor.execute("""
-                INSERT INTO rag_chunks (document_id, citation, content, embedding)
-                VALUES (%s, %s, %s, %s::vector)
-            """, (document_id, citation, content, _as_vector(embedding)))
+        # In batches (2026-10-12): row-by-row was fine for the constitution's 95 chunks but ~6,000 Bible
+        # passages would take over an hour of round trips from a laptop.
+        execute_values(cursor, "INSERT INTO rag_chunks (document_id, citation, content, embedding) VALUES %s",
+                       [(document_id, citation, content, _as_vector(embedding)) for citation, content, embedding in chunks],
+                       template="(%s, %s, %s, %s::vector)", page_size=200)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -160,23 +168,27 @@ def chunks_with_citation_prefix(prefix):
     return rows
 
 
-def nearest_chunks(query_embedding, limit):
+def nearest_chunks(query_embedding, limit, tiers=None):
     """
-    The chunks closest in meaning to the question, closest first.
-    similarity is cosine similarity (1.0 = identical meaning) -- pgvector's
-    <=> operator gives cosine DISTANCE, so similarity = 1 - distance.
+    The chunks closest in meaning to the question, closest first -- optionally only from some tiers (the Bible
+    is searched separately from DeKUTCU's own materials, so ~6,000 Bible passages can't crowd out the
+    constitution's 95). similarity is cosine similarity (1.0 = identical meaning) -- pgvector's <=> operator
+    gives cosine DISTANCE, so similarity = 1 - distance.
     """
     vector = _as_vector(query_embedding)
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    where = "WHERE d.tier = ANY(%s)" if tiers else ""
+    params = (vector, list(tiers), vector, limit) if tiers else (vector, vector, limit)
+    cursor.execute(f"""
         SELECT c.id, c.citation, c.content, d.title, d.tier,
                1 - (c.embedding <=> %s::vector) AS similarity
         FROM rag_chunks c
         JOIN rag_documents d ON d.id = c.document_id
+        {where}
         ORDER BY c.embedding <=> %s::vector
         LIMIT %s
-    """, (vector, vector, limit))
+    """, params)
     rows = cursor.fetchall()
     cursor.close()
     conn.close()
