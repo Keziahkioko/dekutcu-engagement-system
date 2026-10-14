@@ -1,6 +1,7 @@
 # Fundamental truths and secondary issues — a guide for DeKUTCU members
 
-> **Approved for DeKUTCU by Keziah Kioko, 2026-10-15** (drafted 2026-10-12). Part of the companion's materials
+> **Approved for DeKUTCU by Keziah Kioko, 2026-10-15** (drafted 2026-10-12; accuracy review 2026-10-15 at
+> Keziah's request -- each view checked against how its own tradition states it). Part of the companion's materials
 > (tier `dekutcu`), so the bot explains secondary issues fairly instead of declining. Every view is described
 > as its own holders would describe it, with no view marked "correct".
 
@@ -46,8 +47,18 @@ to follow the teaching of their own church, and to discuss these questions with 
 
 ### Baptism
 
-**What all agree on:** Jesus commanded His followers to baptise (Matthew 28:19). Baptism is an outward sign
-connected with being joined to Christ and His people. It does not replace faith in Christ.
+**What all agree on:** Jesus commanded His followers to baptise "in the name of the Father and of the Son and of
+the Holy Spirit" (Matthew 28:19). Baptism marks entry into Christ's church, and it is connected with faith in
+Christ, cleansing from sin and union with Him (Acts 2:38; Romans 6:3-4).
+
+**What does baptism do?**
+- **A sacrament through which God gives grace** — God uses baptism to unite a person to Christ and to give the
+  new birth and forgiveness it signifies, received by faith. Catholic and Orthodox teaching; Lutherans hold
+  that God works through baptism by His promise; the Anglican Articles call it a sign of the new birth by which,
+  "as by an instrument", believers are joined to the church.
+- **An ordinance that pictures what God has done** — baptism is an act of obedience that publicly shows the
+  cleansing and new life the believer has already received by faith; it does not itself bring the new birth.
+  Held by Baptist, Pentecostal and many evangelical and independent churches.
 
 **Who should be baptised?**
 - **Believer's baptism (credobaptism).** Baptism is for those who have personally confessed faith in
@@ -60,9 +71,10 @@ connected with being joined to Christ and His people. It does not replace faith 
 
 **How should baptism be done?**
 - **By immersion only** — the word "baptise" means to dip or immerse, and going under the water pictures
-  burial and resurrection with Christ (Romans 6:3-4).
+  burial and resurrection with Christ (Romans 6:3-4). Held by Baptist and many Pentecostal churches.
 - **Immersion, pouring or sprinkling** — the meaning lies in the washing, not the amount of water; pouring
   pictures the Spirit poured out (Acts 2:17), and sprinkling recalls cleansing (Ezekiel 36:25; Hebrews 10:22).
+  Held by most churches that baptise infants.
 
 ### The Lord's Supper (Holy Communion)
 
@@ -100,7 +112,8 @@ connected with being joined to Christ and His people. It does not replace faith 
 needs faithful, qualified leaders (1 Timothy 3; Titus 1).
 
 - **Episcopal** — oversight by bishops over many congregations, with priests or ministers and deacons
-  (Anglican, Methodist, Catholic, Orthodox; some independent churches).
+  (Anglican, Methodist, Catholic, Orthodox; in Kenya also many Pentecostal and independent churches led by
+  bishops).
 - **Presbyterian** — rule by elders, together in the local church and in regional and national assemblies
   (Presbyterian and Reformed churches; Acts 15; Titus 1:5).
 - **Congregational** — each local church governs itself, with decisions made by its members and its
@@ -115,15 +128,22 @@ and the gospel is to be preached to all people.
   He brings them to faith (Ephesians 1:4-5; Romans 8:29-30; John 6:44).
 - **Arminian / Wesleyan view** — God desires all to be saved and gives grace that enables people to respond;
   election is based on God's foreknowledge of those who will believe (1 Timothy 2:4; 2 Peter 3:9; John 3:16).
+- Some traditions hold positions between these — for example, Lutherans teach that God elects to salvation by
+  grace alone, while those who are lost are lost through their own unbelief, not by God's choice.
 
 ### Can a true believer lose their salvation?
 
 **What all agree on:** Salvation is by God's grace, and believers are called to persevere in faith and holiness.
 
-- **Perseverance of the saints ("once saved, always saved")** — those truly born again will be kept by God
-  to the end (John 10:28-29; Philippians 1:6; Romans 8:38-39).
+- **Perseverance of the saints** — those truly born again are kept by God and will go on in faith and holiness
+  to the end; someone who finally falls away shows they were never truly born again (John 10:28-29;
+  Philippians 1:6; Romans 8:38-39; 1 John 2:19). The Reformed view.
+- **Eternal security ("once saved, always saved")** — a person who has truly believed can never lose their
+  salvation. Held by many Baptist and evangelical Christians, including many who are not Reformed on election.
+  (Reformed teachers often prefer "perseverance", stressing that true believers keep living by faith.)
 - **Salvation can be lost** — a believer can turn away from Christ and be lost (Hebrews 6:4-6; Galatians 5:4;
-  2 Peter 2:20-21). Held by many Wesleyan, Methodist and Pentecostal Christians.
+  2 Peter 2:20-21). Held by many Wesleyan, Methodist and Pentecostal Christians, and in Lutheran, Catholic and
+  Orthodox teaching.
 
 ### The end times
 
@@ -131,9 +151,10 @@ and the gospel is to be preached to all people.
 judge the world in righteousness (Article 11(I); Acts 1:11; 1 Thessalonians 4:16-17).
 
 **The "thousand years" of Revelation 20:**
-- **Premillennialism** — Christ returns *before* a literal thousand-year reign on earth. Some premillennialists
-  also hold that believers will be "raptured" before a period of great tribulation (pre-tribulation); others
-  that this happens during or after it.
+- **Premillennialism** — Christ returns *before* a literal thousand-year reign on earth. *Dispensational*
+  premillennialists usually expect believers to be "raptured" before a period of great tribulation
+  (pre-tribulation); *historic* premillennialists expect the church to go through the tribulation, with
+  Christ gathering His people at His return.
 - **Amillennialism** — the thousand years is symbolic of Christ's present reign, from His resurrection until
   His return.
 - **Postmillennialism** — the gospel will spread and transform the world in a long age of blessing, after
@@ -150,19 +171,28 @@ judge the world in righteousness (Article 11(I); Acts 1:11; 1 Thessalonians 4:16
 - **Egalitarian view** — all ministries and leadership roles are open to both men and women according to
   their gifting (Galatians 3:28; Romans 16:1-7; Acts 2:17-18).
 
+In Kenya, practice differs between churches: the Anglican Church of Kenya, for example, has ordained women as
+priests since the 1980s and as bishops since 2021, while other churches reserve the office of pastor or bishop
+for men.
+
 ### The days of creation
 
 **What all agree on:** God created all things out of nothing by His word (Genesis 1:1; Hebrews 11:3; Article 11(B)).
 
 - **Young-earth view** — God created in six ordinary days, a few thousand years ago.
-- **Old-earth views** — the "days" are long ages or a literary framework, and the earth is very old.
+- **Old-earth views** — the earth is very old, and the "days" are read as long ages (day-age), or as a
+  literary framework presenting God's ordered work rather than a timetable (framework), or with a long gap
+  before Genesis 1:2 (gap view).
+- **Evolutionary creation** — God created living things through processes He designed and sustains, including
+  evolution, while humanity is uniquely made in His image. Held by some evangelicals; many others reject it.
 
 ### The day of worship (Sabbath or Sunday)
 
 **What all agree on:** God gave rest and worship as gifts, and Christians gather to worship Him (Hebrews 10:25).
 
 - **Sunday, the Lord's Day** — Christians worship on the first day of the week, the day of Christ's
-  resurrection (Acts 20:7; 1 Corinthians 16:2; Revelation 1:10). Held by most churches.
+  resurrection (Acts 20:7; 1 Corinthians 16:2; Revelation 1:10). Held by most churches; some (for example in
+  the Presbyterian tradition) keep Sunday as the "Christian Sabbath", a whole day of rest and worship.
 - **Saturday Sabbath** — the seventh-day Sabbath of the commandments remains the day of rest and worship
   (Exodus 20:8-11). Held by Seventh-day Adventists and some other churches.
 - Some also teach that in Christ no day is required above another (Romans 14:5-6; Colossians 2:16-17).
@@ -187,9 +217,10 @@ be mastered by anything (1 Corinthians 6:12).
 - **Betting is wrong** — most churches in Kenya (evangelical, Pentecostal, AIC and many mainline churches)
   teach that Christians should not bet at all: it feeds the love of money, depends on others' losses, wastes
   what God has entrusted, and often becomes an addiction.
-- **Small stakes may be allowed** — some traditions, including Roman Catholic teaching, hold that occasional
-  small stakes are not sinful in themselves, provided they harm no one and money needed for one's
-  responsibilities is never risked.
+- **Small stakes may be allowed** — some traditions, including Roman Catholic teaching, hold that games of
+  chance and wagers are not wrong in themselves, but become wrong when they take what a person needs for
+  themselves or others, and warn that a passion for gambling can become a kind of slavery (Catechism of the
+  Catholic Church, 2413).
 
 **DeKUTCU's own standard:** the Code of Conduct does not address betting specifically.
 

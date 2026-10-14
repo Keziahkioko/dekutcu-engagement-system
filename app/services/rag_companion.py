@@ -86,7 +86,7 @@ Rules:
 1. Every statement in your answer must be directly supported by a passage. Do not add facts, teaching, examples, conclusions or assurances the passages do not state. Quote a Bible verse ONLY if that verse appears in a passage -- never add scripture from memory.
 2. Do not combine passages that are about different things into a claim none of them makes. Rules about membership, discipline, leadership or governance describe the Christian Union as an ORGANISATION -- never present them as spiritual teaching. For example, the membership declaration (what a student affirms when joining) is not a statement of how a person is saved, and the rules on restoring a suspended member are not teaching about personal repentance. When a passage states a rule or standard (for example in the Code of Conduct), report it EXACTLY as written -- never widen it or narrow it, and say who it applies to. For example, a rule about "substance abuse (including alcoholism)" is not a rule against all drinking, and a dress code "for members ministering" is not a rule for every member.
 3. Set "covered" to false if the passages do not actually answer the question. Passages that are merely on a related topic do not count.
-4. DeKUTCU is non-denominational. If the question is about an issue its doctrinal basis does not settle -- such as baptism, the Lord's Supper, spiritual gifts, church government, election, the end times or the others in "DeKUTCU guide to secondary issues" -- set "secondary_issue" to true and answer in three parts: (a) what the Bible passages provided say, WITHOUT drawing a conclusion on the disputed point; (b) the main views exactly as the guide describes them, giving none as correct -- if the guide's section is not among the passages, do not describe views from memory, just say Christians hold different views; (c) end by saying plainly that DeKUTCU does not take a position, and encourage the member to study the Scriptures and talk with their own church or a leader. For a "Christian living question" in the guide (betting, tithing, dress, dating across denominations, alcohol, secular music), explain the Bible's principles, how churches differ, and DeKUTCU's own standard where the guide or the Code of Conduct states one; secondary_issue stays false.
+4. DeKUTCU is non-denominational. If the question is about an issue its doctrinal basis does not settle -- such as baptism, the Lord's Supper, spiritual gifts, church government, election, the end times or the others in "DeKUTCU guide to secondary issues" -- set "secondary_issue" to true and answer in three parts: (a) what the Bible passages provided say, WITHOUT drawing a conclusion on the disputed point -- where the guide names passages for different views, quote passages for EACH view, side by side, so no side's Scripture is left out; (b) the main views exactly as the guide describes them, giving none as correct -- if the guide's section is not among the passages, do not describe views from memory, just say Christians hold different views; (c) end by saying plainly that DeKUTCU does not take a position, and encourage the member to study the Scriptures and talk with their own church or a leader. For a "Christian living question" in the guide (betting, tithing, dress, dating across denominations, alcohol, secular music), explain the Bible's principles, how churches differ, and DeKUTCU's own standard where the guide or the Code of Conduct states one; secondary_issue stays false.
 5. For questions about salvation, base the answer on the doctrinal basis clauses about redemption and justification, and present salvation as DeKUTCU's doctrinal basis does: God's work, by His grace alone, received through faith -- never as something a person achieves by their own declaration, decision or effort.
 6. Passages marked "Supporting source" are not DeKUTCU's own position; if you rely on one, say so ("a supporting source explains..."). Passages marked "Bible (BSB)" are Scripture: you may quote them and explain what they say in their context, naming the reference (e.g. "Romans 12:2 says..."), but do not add teaching, applications or doctrine the verses themselves do not state. For what DeKUTCU believes, its doctrinal basis is the authority; and on the secondary issues in rule 4, do not take sides even if verses are quoted.
 7. Keep the answer short and warm: 2-4 sentences of plain WhatsApp text (up to 8 short sentences for a secondary issue or Christian living question), no markdown, no headings. Never mention passage numbers, article numbers or the word "passage" in the answer -- sources are added automatically from the "sources" list.{pastoral_rule}
@@ -230,14 +230,49 @@ def _lookup_chunks(question):
     return chunks
 
 
+GUIDE_PREFIX = "DeKUTCU guide to secondary issues: "
+_MAX_GUIDE_REFS = 12       # passages the matched guide section cites, looked up so each view's own verses are shown
+
+
+def _guide_verse_chunks(own, seen):
+    """
+    When a section of the secondary issues guide is found, the passages IT cites for each view are looked up too
+    (2026-10-15) -- so the Bible part of the answer shows the verses each side actually relies on (e.g. John
+    10:28-29 AND Hebrews 6:4-6), not whatever verses a meaning-search happened to return.
+    """
+    from app.services.bible_refs import find_references, citation
+    from app.models.bible import get_verses
+    section = next((c for c in own if c["citation"].startswith(GUIDE_PREFIX)), None)
+    if section is None:
+        return []
+    chunks = []
+    for book, chapter, first, last in find_references(section["content"]):
+        if first is None or len(chunks) >= _MAX_GUIDE_REFS:
+            continue          # whole chapters ("Genesis 17") are too long to add here
+        cite = citation(book, chapter, first, min(last, first + 5))
+        if cite in seen:
+            continue
+        verses = get_verses(book, chapter, first, min(last, first + 5))
+        if verses:
+            seen.add(cite)
+            text = " ".join(f"{v['verse']} {v['text']}" for v in verses)
+            chunks.append({"id": None, "citation": cite, "content": f"{cite.replace(' (BSB)', '')}. {text}",
+                           "title": "Berean Standard Bible (BSB)", "tier": "bible", "similarity": None})
+    return chunks
+
+
 def _retrieve(question):
-    """Named passages first, then DeKUTCU's own materials (doctrinal basis kept whole), then the Bible's closest."""
+    """
+    Named passages first, then DeKUTCU's own materials (doctrinal basis kept whole), then -- if a secondary issues
+    guide section was found -- the verses it cites, then the Bible's closest.
+    """
     embedding = embed_query(_search_text(question))
     own = _expand_doctrinal_basis(nearest_chunks(embedding, TOP_K, tiers=_OWN_TIERS))
     named = _lookup_chunks(question)
     seen = {c["citation"] for c in named}
+    guide_verses = _guide_verse_chunks(own, seen)
     bible = [c for c in nearest_chunks(embedding, TOP_K_BIBLE, tiers=("bible",)) if c["citation"] not in seen]
-    return named + own + bible
+    return named + own + guide_verses + bible
 
 
 def _generate(question, chunks, pastoral):
