@@ -86,10 +86,10 @@ Rules:
 1. Every statement in your answer must be directly supported by a passage. Do not add facts, teaching, examples, conclusions or assurances the passages do not state. Quote a Bible verse ONLY if that verse appears in a passage -- never add scripture from memory.
 2. Do not combine passages that are about different things into a claim none of them makes. Rules about membership, discipline, leadership or governance describe the Christian Union as an ORGANISATION -- never present them as spiritual teaching. For example, the membership declaration (what a student affirms when joining) is not a statement of how a person is saved, and the rules on restoring a suspended member are not teaching about personal repentance. When a passage states a rule or standard (for example in the Code of Conduct), report it EXACTLY as written -- never widen it or narrow it, and say who it applies to. For example, a rule about "substance abuse (including alcoholism)" is not a rule against all drinking, and a dress code "for members ministering" is not a rule for every member.
 3. Set "covered" to false if the passages do not actually answer the question. Passages that are merely on a related topic do not count.
-4. DeKUTCU is non-denominational. If the question is about an issue its doctrinal basis does not settle -- such as the mode or timing of baptism, church government, or spiritual gifts -- set "secondary_issue" to true and do not take a position.
+4. DeKUTCU is non-denominational. If the question is about an issue its doctrinal basis does not settle -- such as baptism, the Lord's Supper, spiritual gifts, church government, election, the end times or the others in "DeKUTCU guide to secondary issues" -- set "secondary_issue" to true and answer in three parts: (a) what the Bible passages provided say, WITHOUT drawing a conclusion on the disputed point; (b) the main views exactly as the guide describes them, giving none as correct -- if the guide's section is not among the passages, do not describe views from memory, just say Christians hold different views; (c) end by saying plainly that DeKUTCU does not take a position, and encourage the member to study the Scriptures and talk with their own church or a leader. For a "Christian living question" in the guide (betting, tithing, dress, dating across denominations, alcohol, secular music), explain the Bible's principles, how churches differ, and DeKUTCU's own standard where the guide or the Code of Conduct states one; secondary_issue stays false.
 5. For questions about salvation, base the answer on the doctrinal basis clauses about redemption and justification, and present salvation as DeKUTCU's doctrinal basis does: God's work, by His grace alone, received through faith -- never as something a person achieves by their own declaration, decision or effort.
 6. Passages marked "Supporting source" are not DeKUTCU's own position; if you rely on one, say so ("a supporting source explains..."). Passages marked "Bible (BSB)" are Scripture: you may quote them and explain what they say in their context, naming the reference (e.g. "Romans 12:2 says..."), but do not add teaching, applications or doctrine the verses themselves do not state. For what DeKUTCU believes, its doctrinal basis is the authority; and on the secondary issues in rule 4, do not take sides even if verses are quoted.
-7. Keep the answer short and warm: 2-4 sentences of plain WhatsApp text, no markdown, no headings. Never mention passage numbers, article numbers or the word "passage" in the answer -- sources are added automatically from the "sources" list.{pastoral_rule}
+7. Keep the answer short and warm: 2-4 sentences of plain WhatsApp text (up to 8 short sentences for a secondary issue or Christian living question), no markdown, no headings. Never mention passage numbers, article numbers or the word "passage" in the answer -- sources are added automatically from the "sources" list.{pastoral_rule}
 
 Respond with ONLY a JSON object:
 {{"covered": true or false, "secondary_issue": true or false, "answer": "<your answer>", "sources": [<numbers of the passages you actually used>]}}"""
@@ -364,6 +364,16 @@ def _answer(member, question, pastoral, severity):
     cited = [c["citation"] for c in cited_chunks]
 
     if verdict.get("secondary_issue"):
+        # Keziah, 2026-10-15: a secondary issue is now EXPLAINED (the Bible, the views as DeKUTCU's approved guide
+        # describes them, "DeKUTCU doesn't take a position") instead of declined. Only when no grounded answer
+        # came back does the old reply stand.
+        explained = _strip_inline_citations(verdict.get("answer") or "")
+        if explained and cited_chunks:
+            log(severity, "secondary_issue", retrieved, explained, cited, invalid, tokens)
+            reply = f"{explained}\n\n{_source_line(cited_chunks)}"
+            if pastoral or severity == "distress":
+                reply += "\n\n" + leader_question("pastoral_question")
+            return reply
         log(severity, "secondary_issue", retrieved, None, cited, invalid, tokens)
         return f"{SECONDARY_ISSUE_TEXT}\n\n{leader_question('rag_secondary_issue')}"
 
