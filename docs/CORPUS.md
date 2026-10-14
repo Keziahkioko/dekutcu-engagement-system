@@ -17,8 +17,10 @@ See `docs/PROJECT_LOG.md`, Stage 12 decision 1, for the reasoning.
   DeKUTCU believes, and secondary issues are still not taken sides on. Searched
   separately from DeKUTCU's own materials so it can't crowd them out; a reference
   a member names is looked up exactly (`bible_verses`). Added 2026-10-12.
-- **dekutcu** — DeKUTCU's own practical information (planned FAQ: fellowship
-  times, ministries, contacts). Reserved, nothing loaded yet.
+- **dekutcu** — DeKUTCU's own documents other than the constitution (the Code of
+  Conduct; later the secondary issues guide and a practical FAQ). Labelled "DeKUTCU's
+  own", searched with the constitution. The constitution prevails where they differ
+  (Code of Conduct, Art. 3).
 
 ## Vetting criteria for any supporting source
 
@@ -41,3 +43,4 @@ doctrine (Art. 41(K)).
 |---|---|---|---|---|
 | DeKUTCU Constitution (2024) | constitution | DeKUTCU's own constitution, adopted at the 2024 AGM (Art. 74). File: `corpus/DeKUTCU CONSTITUTION.pdf` | `scripts/ingest_constitution.py` | 95 |
 | Berean Standard Bible (BSB) | bible | https://bereanbible.com/bsb.txt -- public domain since 30 April 2023 (berean.bible/terms.htm). File: `corpus/bsb.txt`. All 31,086 verses in `bible_verses` (exact lookup; the 16 verses the BSB leaves empty are skipped); 6,219 passages of up to 5 verses embedded for meaning-search | `scripts/ingest_bible.py` | 6,219 (once `--load` has run) |
+| DeKUTCU Code of Conduct (2026) | dekutcu | DeKUTCU's own Code of Conduct, ratified at the 2025/2026 AGM (Art. 28; ratification confirmed by Keziah 2026-10-14). File: `corpus/DeKUTCU CODE OF CONDUCT.pdf` | `scripts/ingest_code_of_conduct.py` | 30 |
