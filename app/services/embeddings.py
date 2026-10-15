@@ -53,7 +53,10 @@ def _embed(texts):
 # tokens are estimated as words x 2 -- deliberately high: the first estimate (x 1.4) put 2026-10-15's
 # loads at ~4,500 neurons, yet the whole 10,000 ran out (old English splits into more tokens per word).
 _DAILY_NEURONS = 10_000
-_BULK_SHARE = 0.4
+# Before go-live (no real members), Keziah allowed bulk loading to use the WHOLE allowance (2026-10-15):
+# EMBEDDING_BULK_SHARE=1.0 in the laptop's environment. Never set it on Render -- after go-live the default
+# 40% keeps the rest for live questions.
+_BULK_SHARE = min(1.0, max(0.0, float(os.getenv("EMBEDDING_BULK_SHARE", "0.4") or 0.4)))
 _NEURONS_PER_TOKEN = 18_582 / 1_000_000
 _LEDGER = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                        "corpus", "embedding_ledger.json")
