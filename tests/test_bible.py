@@ -88,11 +88,12 @@ class LookingUpPassages(unittest.TestCase):
 
         def nearest(embedding, limit, tiers=None):
             calls.append((limit, tiers))
-            return found if tiers == ("bible",) else own
+            return found if tiers == ("bible",) else [] if tiers == ("supporting",) else own
         with patch.object(rag_companion, "embed_query", lambda q: [0.0]), \
              patch.object(rag_companion, "nearest_chunks", nearest):
             chunks = rag_companion._retrieve("Explain Romans 12:2")
-        self.assertIn((rag_companion.TOP_K, ("constitution", "supporting", "dekutcu")), calls)
+        self.assertIn((rag_companion.TOP_K, ("constitution", "dekutcu")), calls)
+        self.assertIn((rag_companion.TOP_K_SUPPORTING, ("supporting",)), calls)
         self.assertIn((rag_companion.TOP_K_BIBLE, ("bible",)), calls)
         self.assertEqual([c["citation"] for c in chunks],
                          ["Romans 12:1-4 (BSB)", "DeKUTCU Constitution, Art. 10: Objectives", "Romans 12:1-5 (BSB)", "Romans 8:26-30 (BSB)"],

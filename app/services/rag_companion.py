@@ -57,7 +57,10 @@ TOP_K = 8
 # verses can never crowd out the doctrinal basis. A reference the member names ("Romans 12:2") is looked
 # up exactly (bible_refs + bible_verses) rather than left to meaning-search.
 TOP_K_BIBLE = 4
-_OWN_TIERS = ("constitution", "supporting", "dekutcu")
+# Supporting books (Puritan and Reformed classics, 2026-10-15) are searched separately too -- a 670-passage book
+# must never push DeKUTCU's own constitution, Code of Conduct or guide out of the results.
+TOP_K_SUPPORTING = 3
+_OWN_TIERS = ("constitution", "dekutcu")
 _CONTEXT_VERSES = 2        # verses either side of a named verse, so it's explained in context
 _MAX_LOOKUP_VERSES = 40    # a whole chapter is capped (Psalm 119 has 176)
 
@@ -272,7 +275,8 @@ def _retrieve(question):
     seen = {c["citation"] for c in named}
     guide_verses = _guide_verse_chunks(own, seen)
     bible = [c for c in nearest_chunks(embedding, TOP_K_BIBLE, tiers=("bible",)) if c["citation"] not in seen]
-    return named + own + guide_verses + bible
+    supporting = nearest_chunks(embedding, TOP_K_SUPPORTING, tiers=("supporting",))
+    return named + own + guide_verses + bible + supporting
 
 
 def _generate(question, chunks, pastoral):

@@ -61,7 +61,9 @@ class SchedulerRhythm(unittest.TestCase):
     def test_every_five_minutes_while_something_urgent_is_waiting(self):
         scheduler.check_often_for(150)
         self.assertEqual(scheduler._seconds_until_next_check(), 300)
-        self.assertGreater(scheduler._seconds_until_next_check(time.time() + 151 * 60), 300, "back to hourly afterwards")
+        later = time.time() + 151 * 60
+        self.assertEqual(scheduler._seconds_until_next_check(later), 3600 - (later % 3600) + 60,
+                         "back to hourly afterwards (1 minute past the next hour -- which can be under 5 minutes away)")
 
     def test_an_urgent_case_switches_on_the_fast_checks(self):
         with patch.object(escalation, "find_target_leaders", lambda m: [("254700000009", "Leader", "R9")]), \
