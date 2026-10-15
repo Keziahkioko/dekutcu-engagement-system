@@ -33,8 +33,22 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 TARGET_WORDS = 200
 
-# Passages that argue election/predestination -- one view of a secondary issue (the guide gives all views).
-_ELECTION = re.compile(r"\b(elect|elected|election|electing|predestinat\w*)\b", re.IGNORECASE)
+# Passages left out (each with its reason, shown in the review list). Secondary issues: the guide gives every view,
+# so one side's arguments are left out. Polemic against other churches (approved by Keziah 2026-10-15): DeKUTCU has
+# members from many traditions, Catholic backgrounds included, and the guide treats every tradition respectfully.
+_ELECTION = (re.compile(r"\b(elect|elected|election|electing|predestinat\w*)\b", re.IGNORECASE),
+             "argues election/predestination")
+_PERSEVERANCE = (re.compile(r"persever\w*|fall(ing)? away|final falling", re.IGNORECASE),
+                 "argues one view of perseverance")
+_POLEMIC = (re.compile(r"\b(roman(ism|ist|ists)?|popery|popish|pope|ritualis\w*|romish|the mass)\b", re.IGNORECASE),
+            "polemic against another church")
+
+# How each book marks its chapter headings.
+_NUMBERED = re.compile(r"^ {0,2}(\d+)\. ([A-Z][A-Za-z',’ -]{2,70})$")           # Watson: "  12. The Trinity"
+_CAPS = re.compile(r"^([A-Z][A-Z ,'?!\.-]{4,60})$")                                # Spurgeon: "FAITH, WHAT IS IT?"
+_OWEN = re.compile(r"^\s+(Chapter [IVXL]+)\.\s*$")                                 # Owen: "      Chapter IV."
+_ROMAN = re.compile(r"^ {0,20}[IVXL]+\.?\s*$")                                     # Ryle: "XIII." then the title line
+_TITLE_LINE = re.compile(r'^ {0,20}["A-Z].{2,45}$')
 
 BOOKS = {
     "watson": {
@@ -47,11 +61,63 @@ BOOKS = {
         "start": "1. A Preliminary Discourse To Catechising",
         # The Reformed view of one secondary issue (the guide presents it as one of three positions).
         "skip_chapters": {"Perseverance"},
-        "skip_passages": _ELECTION,
+        "skip_passages": [_ELECTION],
+        "headings": "numbered",
+    },
+    "owen": {
+        "file": "corpus/owen_mortification.txt",
+        "title": "John Owen, Of the Mortification of Sin in Believers (1656)",
+        "cite": "John Owen, Of the Mortification of Sin",
+        "source": "CCEL (ccel.org/ccel/owen/mort), Goold edition (1850-53) -- public domain. Approved by Keziah 2026-10-15.",
+        "start": "Chapter I.",
+        "skip_chapters": set(),
+        "skip_passages": [_ELECTION, _PERSEVERANCE, _POLEMIC],   # none found -- kept as a safety net
+        "headings": "owen",
+    },
+    "spurgeon": {
+        "file": "corpus/spurgeon_all_of_grace.txt",
+        "title": "C. H. Spurgeon, All of Grace (1886)",
+        "cite": "C. H. Spurgeon, All of Grace",
+        "source": "CCEL (ccel.org/ccel/spurgeon/grace) -- public domain. Approved by Keziah 2026-10-15.",
+        "start": "TO YOU",
+        # Spurgeon's Reformed view of perseverance -- one of three positions in the guide.
+        "skip_chapters": {"THE FEAR OF FINAL FALLING", "CONFIRMATION", "WHY SAINTS PERSEVERE"},
+        "skip_passages": [_ELECTION, _POLEMIC],
+        "headings": "caps",
+    },
+    "ryle": {
+        "file": "corpus/ryle_holiness.txt",
+        "title": "J. C. Ryle, Holiness (1879)",
+        "cite": "J. C. Ryle, Holiness",
+        "source": "CCEL (ccel.org/ccel/ryle/holiness), James Clarke 1952 reprint of Ryle's text (no modern additions) "
+                  "-- public domain. Approved by Keziah 2026-10-15.",
+        "start": "INTRODUCTION\n\n   The twenty papers",
+        # A polemical chapter on Victorian church controversies (33 mentions of Romanism/Popery/ritualism).
+        "skip_chapters": {"WANTS OF THE TIMES"},
+        "skip_passages": [_ELECTION, _PERSEVERANCE, _POLEMIC],
+        "headings": "roman",
     },
 }
 
-_HEADING = re.compile(r"^ {0,2}(\d+)\. ([A-Z][A-Za-z',’ -]{2,70})$")
+
+def _heading(style, lines, i):
+    """The chapter title starting at line i; "" for a line that belongs to a heading just read; None otherwise."""
+    line = lines[i]
+    if style == "numbered":
+        m = _NUMBERED.match(line)
+        return m.group(2).strip() if m else None
+    if style == "caps":
+        m = _CAPS.match(line)
+        return m.group(1).strip() if m else None
+    if style == "owen":
+        m = _OWEN.match(line)
+        return m.group(1) if m else None
+    if style == "roman":
+        if _ROMAN.match(line) and i + 1 < len(lines) and _TITLE_LINE.match(lines[i + 1]):
+            return lines[i + 1].strip().strip('"').strip()
+        if i > 0 and _ROMAN.match(lines[i - 1]) and _TITLE_LINE.match(line):
+            return ""
+    return None
 
 
 def _squash(text):
@@ -69,13 +135,18 @@ def read_chapters(book):
             paragraphs.append(_squash(" ".join(paragraph)))
             paragraph.clear()
 
-    for line in text.splitlines():
-        heading = _HEADING.match(line)
-        if heading:
+    lines = text.splitlines()
+    if book["headings"] == "roman":
+        title = "Introduction"            # Ryle's introduction comes before the first numbered chapter
+    for i, line in enumerate(lines):
+        new_title = _heading(book["headings"], lines, i)
+        if new_title == "":
+            continue                      # the title line of a heading already read
+        if new_title:
             end_paragraph()
             if title and paragraphs:
                 chapters.append((title, list(paragraphs)))
-            title, paragraphs = heading.group(2).strip(), []
+            title, paragraphs = new_title, []
             continue
         if not line.strip() or set(line.strip()) <= {"_"}:
             end_paragraph()
@@ -96,8 +167,9 @@ def build(book):
             continue
         pieces = []
         for p in paragraphs:
-            if book["skip_passages"] and book["skip_passages"].search(p):
-                left_out.append((title, "argues election/predestination", p))
+            reason = next((why for pattern, why in book["skip_passages"] if pattern.search(p)), None)
+            if reason:
+                left_out.append((title, reason, p))
             else:
                 pieces.extend(_split_long(p))
         for body in _pack(pieces):
