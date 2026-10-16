@@ -81,7 +81,8 @@ class SchedulerRhythm(unittest.TestCase):
              patch.object(escalation, "send_whatsapp_message", lambda *a, **k: None):
             escalation._notify_leaders({"name": "M", "whatsapp_id": "254700000001", "reg_number": "R1"},
                                        "needs_support", "x", "would like support", acute=False)
-        self.assertGreater(scheduler._seconds_until_next_check(), 300)
+        # Checked on the switch itself, not the wait: just before the hour, the hourly wait is legitimately < 5 min.
+        self.assertEqual(scheduler._fast_until[0], 0.0, "fast checks not switched on")
 
 
 class _FakeConn:
