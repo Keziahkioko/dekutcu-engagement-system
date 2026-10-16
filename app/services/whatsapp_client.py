@@ -41,6 +41,7 @@ DEFAULT_TOPIC = "an update"
 CHECKIN_TEMPLATE = "dekutcu_checkin"
 URGENT_TEMPLATE = "dekutcu_urgent_care"
 _LANGUAGE = "en"
+_TIMEOUT_SECONDS = 30
 
 
 def templates_enabled():
@@ -53,7 +54,9 @@ def _post(payload):
         "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
         "Content-Type": "application/json",
     }
-    return requests.post(url, headers=headers, json={"messaging_product": "whatsapp", **payload})
+    # A time limit (2026-10-16): without one, a hung connection to Meta would freeze the calling worker forever.
+    return requests.post(url, headers=headers, json={"messaging_product": "whatsapp", **payload},
+                         timeout=_TIMEOUT_SECONDS)
 
 
 def _send_text(to_number, message_text):

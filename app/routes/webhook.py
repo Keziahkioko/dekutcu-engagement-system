@@ -111,6 +111,7 @@ _FILLER_REPLY = "Got your message! I'm a little busy right now -- give me a mome
 # moment it queues a message, and the scheduler wakes them on each of its runs as a safety net (a message
 # queued just before a restart, say).
 _wake_signals = [threading.Event() for _ in range(_NUM_WORKERS)]
+_CLAIM_RETRY_SECONDS = 5
 
 
 def wake_workers():
@@ -137,7 +138,18 @@ def _process_queue_shard(shard_index):
     signal = _wake_signals[shard_index]
     while True:
         signal.clear()   # BEFORE looking: a message queued after this point sets it again, so none is missed
-        message = claim_next_message(shard_index, _NUM_WORKERS)
+        try:
+            message = claim_next_message(shard_index, _NUM_WORKERS)
+        except Exception as e:
+            # Live bug, 2026-10-16: this call sat OUTSIDE the safety net below, so one dropped database
+            # connection (Neon waking from its idle sleep, a network blip) killed the thread for good --
+            # everyone in its shard was silently never answered while the app still looked healthy.
+            # Now: log it, pause briefly, try again. The message stays queued, so nothing is lost.
+            print(f"Worker {shard_index} couldn't check the queue ({type(e).__name__}: {e}); retrying in "
+                  f"{_CLAIM_RETRY_SECONDS}s")
+            time.sleep(_CLAIM_RETRY_SECONDS)
+            signal.set()   # look again straight after the pause, even if nothing new arrives
+            continue
         if message is None:
             signal.wait()
             continue

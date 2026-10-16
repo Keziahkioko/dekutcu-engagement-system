@@ -50,6 +50,43 @@ class WorkersWaitForASignal(unittest.TestCase):
         self.assertEqual(self.handled, ["reply to hi"])
 
 
+class AWorkerSurvivesADroppedConnection(unittest.TestCase):
+    """Live bug, 2026-10-16: a database error while checking the queue killed the worker thread for good."""
+
+    def test_the_worker_retries_and_still_answers(self):
+        handled, calls = [], [0]
+
+        def claim(shard, workers):
+            calls[0] += 1
+            if calls[0] == 1:
+                raise ConnectionError("server closed the connection unexpectedly")
+            if calls[0] == 2:
+                return {"id": 1, "sender_number": "254700000001", "message_text": "hi"}
+            return None
+        with patch.object(webhook, "claim_next_message", claim), \
+             patch.object(webhook, "_CLAIM_RETRY_SECONDS", 0.1), \
+             patch.object(webhook, "route_incoming_message", lambda s, t: f"reply to {t}"), \
+             patch.object(webhook, "send_whatsapp_message", lambda **k: handled.append(k["message_text"])), \
+             patch.object(webhook, "delete_pending_message", lambda i: None):
+            worker = threading.Thread(target=webhook._process_queue_shard, args=(1,), daemon=True)
+            worker.start()
+            time.sleep(0.6)
+            self.assertTrue(worker.is_alive(), "the worker thread is still running")
+            self.assertEqual(handled, ["reply to hi"], "the message queued during the failure was answered")
+
+
+class SendsToMetaHaveATimeLimit(unittest.TestCase):
+    def test_a_timeout_is_passed(self):
+        from app.services import whatsapp_client
+        seen = {}
+
+        class _Ok:
+            status_code, text = 200, ""
+        with patch.object(whatsapp_client.requests, "post", lambda *a, **k: seen.update(k) or _Ok()):
+            whatsapp_client.send_whatsapp_message("254700000001", "hi")
+        self.assertEqual(seen.get("timeout"), 30)
+
+
 class SchedulerRhythm(unittest.TestCase):
     def setUp(self):
         scheduler._fast_until[0] = 0.0
