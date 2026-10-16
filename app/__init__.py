@@ -56,6 +56,7 @@ from app.services.guide_coordinator import init_guide_coordinator_tables
 from app.services.guide_batches import init_batch_tables, check_unconfirmed_batches
 from app.services.guide_handover import init_handover_tables
 from app.models.last_flow_reply import init_last_flow_reply_table
+from app.models.last_inbound import init_last_inbound_table
 from app.models.bible import init_bible_table
 from app.services.withdrawal import finish_pending_withdrawals
 from app.services.guide_payments import check_unsettled_purchases
@@ -129,6 +130,7 @@ def create_app():
     init_batch_tables()
     init_handover_tables()
     init_last_flow_reply_table()
+    init_last_inbound_table()
     init_bible_table()
 
     run_workers = _should_run_background_workers()

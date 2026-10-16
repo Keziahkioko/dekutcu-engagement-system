@@ -70,6 +70,7 @@ from app.services import guide_batches
 from app.services import guide_handover
 from app.models.study_guide import get_pending_guide_creation, get_pending_guide_purchase, delete_pending_guide_creation
 from app.models.last_flow_reply import get_last_flow_reply, set_last_flow_reply, clear_last_flow_reply, fingerprint
+from app.models.last_inbound import record_inbound
 from app.database import get_connection
 from app.services.whatsapp_client import send_whatsapp_message
 
@@ -223,6 +224,8 @@ def _accept_message(message):
     if message_id and not claim_message_id(message_id):
         print(f"Ignoring a repeat delivery of message {message_id}")
         return
+    # Any real message (even one the bot can't read) opens WhatsApp's 24-hour window -- see app/models/last_inbound.py
+    record_inbound(sender_number)
     kind = message.get("type", "text")
     if kind != "text" or "text" not in message:
         if kind not in _SILENT_TYPES:
