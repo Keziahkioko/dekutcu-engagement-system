@@ -63,3 +63,22 @@ def mark_notified(whatsapp_id):
     conn.commit()
     cursor.close()
     conn.close()
+
+
+def take_outbound(whatsapp_id):
+    """
+    Step 3: everything still waiting for this person (a week old at most), oldest first -- REMOVED as it's taken,
+    so nothing is ever delivered twice. A list of {"message_text", "created_at"}.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"""
+        DELETE FROM pending_outbound
+        WHERE whatsapp_id = %s AND created_at >= NOW() - INTERVAL '{KEEP_DAYS} days'
+        RETURNING id, message_text, created_at
+    """, (whatsapp_id,))
+    rows = sorted(cursor.fetchall(), key=lambda r: r["id"])
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return [{"message_text": r["message_text"], "created_at": r["created_at"]} for r in rows]

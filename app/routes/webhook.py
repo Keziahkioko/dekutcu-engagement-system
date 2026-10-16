@@ -68,6 +68,7 @@ from app.services import number_change
 from app.services import guide_coordinator
 from app.services import guide_batches
 from app.services import guide_handover
+from app.services import saved_messages
 from app.models.study_guide import get_pending_guide_creation, get_pending_guide_purchase, delete_pending_guide_creation
 from app.models.last_flow_reply import get_last_flow_reply, set_last_flow_reply, clear_last_flow_reply, fingerprint
 from app.models.last_inbound import record_inbound
@@ -211,6 +212,25 @@ _SILENT_TYPES = {"reaction", "system", "unsupported", "ephemeral", "request_welc
 _NOT_TEXT_REPLY = ("I can only read typed text messages for now -- please type what you need and I'll help 🙂")
 
 
+def _text_of(message):
+    """
+    What the person said, as text -- or None if it isn't something the bot can read. A tapped button counts
+    as text (WhatsApp templates, 2026-10-16): "button" is a template's quick-reply button ("Read it"),
+    "interactive" a reply button or list choice; either is handled exactly as if they'd typed its words.
+    """
+    kind = message.get("type", "text")
+    if kind == "text":
+        return (message.get("text") or {}).get("body")
+    if kind == "button":
+        button = message.get("button") or {}
+        return button.get("text") or button.get("payload")
+    if kind == "interactive":
+        interactive = message.get("interactive") or {}
+        choice = interactive.get("button_reply") or interactive.get("list_reply") or {}
+        return choice.get("title") or choice.get("id")
+    return None
+
+
 def _accept_message(message):
     """
     One incoming message. QA 2026-10-01 fixes:
@@ -226,12 +246,11 @@ def _accept_message(message):
         return
     # Any real message (even one the bot can't read) opens WhatsApp's 24-hour window -- see app/models/last_inbound.py
     record_inbound(sender_number)
-    kind = message.get("type", "text")
-    if kind != "text" or "text" not in message:
-        if kind not in _SILENT_TYPES:
+    message_text = _text_of(message)
+    if message_text is None:
+        if message.get("type", "text") not in _SILENT_TYPES:
             send_whatsapp_message(to_number=sender_number, message_text=_NOT_TEXT_REPLY)
         return
-    message_text = message["text"]["body"]
     backlog_count = enqueue_message(sender_number, message_text)
     wake_workers()
     if backlog_count >= _BACKLOG_FILLER_THRESHOLD:
@@ -294,12 +313,21 @@ def route_incoming_message(sender_number, message_text):
     5. Mid-registration (a pending row exists): continue the
        registration conversation.
     6. Brand-new sender: kick off registration.
+
+    Between 1 and 2 (WhatsApp templates, 2026-10-16): any messages saved
+    for them while their 24-hour window was closed are delivered.
     """
     if is_stop_message(message_text):
         return _handle_global_stop(sender_number)
 
     if is_resume_message(message_text):
         return _handle_global_resume(sender_number)
+
+    # Messages saved while their 24-hour window was closed (WhatsApp templates) are delivered first;
+    # a short reply ("Read it") just collects them -- see app/services/saved_messages.py.
+    reply, handled = saved_messages.deliver_saved_messages(sender_number, message_text)
+    if handled:
+        return reply
 
     if is_registered(sender_number):
         # A leader claiming an escalation case ("CLAIM 12") -- checked before
