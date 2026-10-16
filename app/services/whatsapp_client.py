@@ -31,6 +31,15 @@ WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
 #   "Hi {{1}}, you have a new message from DeKUTCU about {{2}}. Reply to this message to read it."  [Read it]
 MESSAGE_WAITING_TEMPLATE = "dekutcu_message_waiting"
 DEFAULT_TOPIC = "an update"
+# Step 5 -- two special templates:
+#   check-in (sent INSTEAD of the message -- the template is the question itself, nothing saved):
+#     "Hi {{1}}, were you at {{2}} today? 🙏 Reply YES if you were there, or tell us what kept you away."
+#     [Yes, I was there] [No, I missed it]
+#   urgent care alert (the details saved as usual; ALWAYS sent, even if a normal one is already waiting):
+#     "Urgent: a DeKUTCU member may need support right now. Please reply to this message to see the
+#      details and take the case."  [Show me]     -- the member's name and words are never in it.
+CHECKIN_TEMPLATE = "dekutcu_checkin"
+URGENT_TEMPLATE = "dekutcu_urgent_care"
 _LANGUAGE = "en"
 
 
@@ -91,12 +100,17 @@ def _first_name(to_number):
     return name.split()[0] if name else "there"
 
 
-def _hold_until_they_reply(to_number, message_text, topic):
+def _hold_until_they_reply(to_number, message_text, topic, urgent):
     from app.models.pending_outbound import save_outbound, mark_notified
-    if save_outbound(to_number, message_text):
+    already_told = save_outbound(to_number, message_text)
+    if urgent:
+        # Someone may be in danger: the leader is alerted every time, never left with a quiet "message waiting".
+        response = send_whatsapp_template(to_number, URGENT_TEMPLATE, [])
+    elif already_told:
         return _Held()
-    response = send_whatsapp_template(to_number, MESSAGE_WAITING_TEMPLATE,
-                                      [_first_name(to_number), topic or DEFAULT_TOPIC])
+    else:
+        response = send_whatsapp_template(to_number, MESSAGE_WAITING_TEMPLATE,
+                                          [_first_name(to_number), topic or DEFAULT_TOPIC])
     if response.status_code == 200:
         mark_notified(to_number)
     # If Meta refused (e.g. a blocked number), the message stays saved -- they still get it if they ever
@@ -104,10 +118,13 @@ def _hold_until_they_reply(to_number, message_text, topic):
     return response
 
 
-def send_whatsapp_message(to_number, message_text, topic=None):
+def send_whatsapp_message(to_number, message_text, topic=None, template=None, urgent=False):
     """
     Sends a WhatsApp message using Meta's API -- or, outside the person's 24-hour window (with templates
     switched on), saves it and sends a "message waiting" template instead. See the top of this file.
+      topic:    what the waiting message is about ("a study guide update");
+      template: (name, values) -- outside the window, send THIS template instead, nothing saved (the check-in);
+      urgent:   save it and always send the urgent care template (acute cases and their reminders).
     """
     if not templates_enabled():
         return _send_text(to_number, message_text)
@@ -120,4 +137,7 @@ def send_whatsapp_message(to_number, message_text, topic=None):
         inside = True
     if inside:
         return _send_text(to_number, message_text)
-    return _hold_until_they_reply(to_number, message_text, topic)
+    if template:
+        name, values = template
+        return send_whatsapp_template(to_number, name, values)
+    return _hold_until_they_reply(to_number, message_text, topic, urgent)

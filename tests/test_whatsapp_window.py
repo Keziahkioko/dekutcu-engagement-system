@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from app.models import last_inbound
 from app.routes import webhook
-from app.services import whatsapp_client, saved_messages
+from app.services import whatsapp_client, saved_messages, fellowship_checkin, escalation
 from app.models import pending_outbound, member as member_model
 
 NOW = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
@@ -238,6 +238,105 @@ class SavedMessagesDeliveredWhenTheyReply(unittest.TestCase):
         with patch.object(webhook, "_handle_global_stop", lambda n: "stop handled"):
             self.assertEqual(webhook.route_incoming_message("254700000001", "STOP"), "stop handled")
         self.assertEqual(self.taken[0], 0, "saved messages wait for their next message")
+
+
+
+class TheTwoSpecialTemplates(SendingChoosesTextOrTemplate):
+    """Step 5: the check-in goes AS its template (nothing saved); urgent care alerts always get the urgent one."""
+
+    def test_checkin_outside_the_window_is_the_template_itself(self):
+        self.inside[0] = False
+        whatsapp_client.send_whatsapp_message("254700000001", "Were you at Friday Fellowship today?...",
+                                              template=("dekutcu_checkin", ["Wanjiru", "Friday Fellowship"]))
+        template = self.posted[0]["template"]
+        self.assertEqual(template["name"], "dekutcu_checkin")
+        self.assertEqual([v["text"] for v in template["components"][0]["parameters"]], ["Wanjiru", "Friday Fellowship"])
+        self.assertEqual(self.saved, [], "nothing saved -- the template IS the question")
+
+    def test_checkin_inside_the_window_is_the_ordinary_message(self):
+        whatsapp_client.send_whatsapp_message("254700000001", "Were you at...", template=("dekutcu_checkin", ["W", "F"]))
+        self.assertEqual(self.posted[0]["type"], "text")
+
+    def test_urgent_always_alerts_even_with_a_message_already_waiting(self):
+        self.inside[0] = False
+        whatsapp_client.send_whatsapp_message("254700000009", "an announcement")                  # normal: waiting template
+        whatsapp_client.send_whatsapp_message("254700000009", "Wanjiru may need urgent support", urgent=True)
+        whatsapp_client.send_whatsapp_message("254700000009", "Still unclaimed: ...", urgent=True)   # the reminder
+        self.assertEqual([p["template"]["name"] for p in self.posted],
+                         ["dekutcu_message_waiting", "dekutcu_urgent_care", "dekutcu_urgent_care"])
+        self.assertEqual(self.posted[1]["template"]["components"][0]["parameters"], [], "no name, no words in it")
+        self.assertEqual(len(self.saved), 3, "the details are saved, shown when they reply")
+
+
+class CheckinSendsAndButtons(unittest.TestCase):
+    def test_the_checkin_offers_its_template_with_first_name_and_activity(self):
+        calls = []
+
+        def send(to, text, **kw):
+            calls.append((to, kw))
+            return _Response(200)
+        members = [{"whatsapp_id": "254700000001", "name": "Wanjiru Kamau", "followup_consent": True},
+                   {"whatsapp_id": "254700000002", "name": "", "followup_consent": True}]
+        with patch.object(fellowship_checkin, "claim_checkin_broadcast", lambda *a: True), \
+             patch.object(fellowship_checkin, "get_data_consenting_members", lambda: members), \
+             patch.object(fellowship_checkin, "get_pending_fellowship_checkin", lambda n: None), \
+             patch.object(fellowship_checkin, "start_pending_fellowship_checkin", lambda *a: None), \
+             patch.object(fellowship_checkin, "send_whatsapp_message", send):
+            self.assertEqual(fellowship_checkin.send_fellowship_checkin(4), 2)   # Friday
+        self.assertEqual(calls[0][1]["template"], ("dekutcu_checkin", ["Wanjiru", "Friday Fellowship"]))
+        self.assertEqual(calls[1][1]["template"][1][0], "there")
+
+    def _answer(self, text):
+        asked, classified = [], []
+        pending = {"activity_type": "friday_fellowship", "checkin_date": fellowship_checkin._today(),
+                   "other_messages": True, "confirm_asked": False}
+        with patch.object(fellowship_checkin, "get_pending_fellowship_checkin", lambda n: pending), \
+             patch.object(fellowship_checkin, "delete_pending_fellowship_checkin", lambda n: None), \
+             patch.object(fellowship_checkin, "get_member_by_whatsapp_id", lambda n: {"reg_number": "R1", "name": "Wanjiru"}), \
+             patch.object(fellowship_checkin, "create_absence", lambda *a: 7), \
+             patch.object(fellowship_checkin.reason_capture, "begin_reason_capture", lambda *a, **k: asked.append(a)), \
+             patch.object(fellowship_checkin.reason_capture, "build_live_reason_prompt", lambda name: "What kept you away?"), \
+             patch.object(fellowship_checkin.reason_capture, "classify_and_record", lambda *a: classified.append(a) or "x"):
+            reply = fellowship_checkin.handle_checkin_message("254700000001", text)
+        return reply, asked, classified
+
+    def test_no_i_missed_it_asks_why_instead_of_being_the_reason(self):
+        reply, asked, classified = self._answer("No, I missed it")
+        self.assertEqual(reply, "What kept you away?")
+        self.assertEqual(len(asked), 1)
+        self.assertEqual(classified, [], "'missed it' is not sent to the AI as a reason")
+
+    def test_a_real_reason_is_still_classified(self):
+        _reply, asked, classified = self._answer("I had a CAT that evening")
+        self.assertEqual((len(asked), len(classified)), (0, 1))
+
+
+class UrgentCareAlerts(unittest.TestCase):
+    def _notify(self, acute):
+        sent = []
+        with patch.object(escalation, "find_target_leaders", lambda m: [("254700000009", "Leader", "R9")]), \
+             patch.object(escalation, "create_case", lambda *a, **k: 1), \
+             patch.object(escalation, "create_escalation", lambda *a, **k: None), \
+             patch.object(escalation, "send_whatsapp_message", lambda to, text, **kw: sent.append(kw)):
+            escalation._notify_leaders({"name": "M", "whatsapp_id": "254700000001", "reg_number": "R1"},
+                                       "needs_support", "x", "label", acute=acute)
+        return sent[0]
+
+    def test_an_acute_case_is_urgent(self):
+        self.assertTrue(self._notify(True)["urgent"])
+
+    def test_a_normal_case_waits_with_a_topic_that_names_nobody(self):
+        kw = self._notify(False)
+        self.assertFalse(kw["urgent"])
+        self.assertEqual(kw["topic"], "a member who would like support")
+
+
+class CheckinButtonsAreNotSwallowed(SavedMessagesDeliveredWhenTheyReply):
+    def test_a_checkin_tap_with_messages_waiting_delivers_them_then_answers_the_checkin(self):
+        self.waiting[:] = [_saved("The new guide is out", 15, 18)]
+        for tap in ["Yes, I was there", "No, I missed it"]:
+            self.waiting[:] = [_saved("The new guide is out", 15, 18)]
+            self.assertEqual(saved_messages.deliver_saved_messages("254700000001", tap), (None, False), tap)
 
 
 if __name__ == "__main__":

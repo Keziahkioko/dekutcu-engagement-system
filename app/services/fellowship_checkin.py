@@ -62,7 +62,7 @@ from app.models.pending_fellowship_checkin import (
     mark_checkin_flag,
 )
 from app.models.checkin_broadcast import claim_checkin_broadcast, get_checkin_broadcast
-from app.services.whatsapp_client import send_whatsapp_message
+from app.services.whatsapp_client import send_whatsapp_message, CHECKIN_TEMPLATE
 from app.services.message_generator import display_name_for
 from app.services import reason_capture
 from app.services import conversation
@@ -105,6 +105,9 @@ TRACKED_WEEKDAYS = list(_DAYS.keys()) + [_BIBLE_STUDY_WEEKDAY]   # Tuesday's onl
 
 _YES_VARIANTS = {"yes", "yeah", "yep", "yup"}
 _BARE_NO_VARIANTS = {"no", "nope", "nah"}
+# The check-in template's "No, I missed it" button (and the same words typed): a no -- so they're asked why --
+# not a reason in itself. Clearly about the check-in, so the "just to be sure" safeguard doesn't apply.
+_MISSED_IT = {"no, i missed it", "no i missed it", "i missed it"}
 
 _REGULAR_WINDOW = 3
 _REGULAR_THRESHOLD = 2
@@ -171,7 +174,10 @@ def send_fellowship_checkin(weekday, triggered_by="scheduled"):
             f"Were you at {display_name} today? Reply YES if you were there, "
             "or let us know what kept you away."
         )
-        response = send_whatsapp_message(member["whatsapp_id"], message)
+        # Outside their 24-hour window, the question goes as the approved check-in template, with its two buttons.
+        first_name = (member["name"] or "").split()[0] if (member["name"] or "").strip() else "there"
+        response = send_whatsapp_message(member["whatsapp_id"], message,
+                                         template=(CHECKIN_TEMPLATE, [first_name, display_name]))
         if response.status_code == 200:
             # The new question REPLACES any older one still open (2026-10-07) -- close that one
             # properly first (a silent regular's absence recorded), instead of overwriting it.
@@ -220,6 +226,8 @@ def handle_checkin_message(whatsapp_id, message_text):
     text = message_text.strip()
     normalised = conversation.normalise(text)
     lowered = "yes" if _ATTENDED.match(normalised) else normalised
+    if normalised in _MISSED_IT:
+        lowered = "no"
 
     if lowered not in _YES_VARIANTS and lowered not in _BARE_NO_VARIANTS and conversation.yes_no(text) != "no":
         # Neither a yes nor a no: an absence reason ("I had class") -- or not an answer at all.

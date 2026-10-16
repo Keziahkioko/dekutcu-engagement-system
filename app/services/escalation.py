@@ -200,6 +200,10 @@ def _whatsapp_number(whatsapp_id):
     return f"+{whatsapp_id}" if whatsapp_id and not whatsapp_id.startswith("+") else whatsapp_id
 
 
+# What a normal care alert is "about" in the message-waiting template (never the member's name or words).
+_CARE_TOPIC = "a member who would like support"
+
+
 def _notify_leaders(member, trigger_type, context_text, urgency_label, acute=False):
     """
     Opens a case and notifies every target leader. Every notification
@@ -235,7 +239,9 @@ def _notify_leaders(member, trigger_type, context_text, urgency_label, acute=Fal
                 f"reply CLAIM {case_id} -- the first to reply takes it, and the others "
                 "will be told so nobody doubles up."
             )
-        send_whatsapp_message(whatsapp_id, notification)
+        # Outside the leader's 24-hour window (WhatsApp templates): an acute case goes as the urgent template,
+        # every time; a normal one as "a new message about a member who would like support".
+        send_whatsapp_message(whatsapp_id, notification, topic=_CARE_TOPIC, urgent=acute)
         create_escalation(member["reg_number"], trigger_type, context_text, leader_reg_number, _now(), case_id)
     return case_id, targets
 
@@ -541,6 +547,7 @@ def _remind_notified(case, member, age):
                 f"Still unclaimed: {member['name']} {what} {_ago(age)} ago and no leader has taken it yet.\n\n"
                 f"Their WhatsApp: {_whatsapp_number(member['whatsapp_id'])}\n\n"
                 f"If you can reach out, reply CLAIM {case['id']}.",
+                topic=_CARE_TOPIC, urgent=case["urgency"] == "acute",
             )
 
 
@@ -558,7 +565,7 @@ def _backstop(case, member, age):
             f"\n\nTheir WhatsApp: {_whatsapp_number(member['whatsapp_id'])}\n\n"
             f"As {office}, please make sure someone reaches out -- reply CLAIM {case['id']} to take it yourself."
         )
-        send_whatsapp_message(person["whatsapp_id"], text)
+        send_whatsapp_message(person["whatsapp_id"], text, topic=_CARE_TOPIC, urgent=case["urgency"] == "acute")
         # Recorded as notified on this case, so their CLAIM is accepted.
         create_escalation(member["reg_number"], f"{case['trigger_type']}_backstop", case["context_text"],
                           person["reg_number"], _now(), case["id"])
