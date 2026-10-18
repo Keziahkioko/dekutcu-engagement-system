@@ -5,7 +5,7 @@
 #   bash scripts/load_books.sh
 cd "$(dirname "$0")/.."
 PY=venv/Scripts/python.exe; [ -x "$PY" ] || PY=python
-for book in watson owen spurgeon ryle; do
+for book in watson owen spurgeon ryle irenicum henry; do
   echo "== $book (real database)"
   PYTHONIOENCODING=utf-8 "$PY" scripts/ingest_book.py "$book" 2>&1 | grep -v "HTTP Request" || true
   if [ -f "corpus/${book}_embeddings.json" ]; then

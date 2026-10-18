@@ -40,8 +40,29 @@ _ELECTION = (re.compile(r"\b(elect|elected|election|electing|predestinat\w*)\b",
              "argues election/predestination")
 _PERSEVERANCE = (re.compile(r"persever\w*|fall(ing)? away|final falling", re.IGNORECASE),
                  "argues one view of perseverance")
-_POLEMIC = (re.compile(r"\b(roman(ism|ist|ists)?|popery|popish|pope|ritualis\w*|romish|the mass)\b", re.IGNORECASE),
+_POLEMIC = (re.compile(r"\b(roman(ism|ist|ists)?|popery|popish|pope|ritualis\w*|romish|the mass|papists?|papacy)\b", re.IGNORECASE),
             "polemic against another church")
+# Added 2026-10-18 for Burroughs' Irenicum (1640s England), same approved policy: church government (Presbyterian /
+# Independent / Congregational order) and Parliament's religious politics are secondary and of their time; and
+# baptism is one of the guide's secondary issues.
+_POLITY = (re.compile(r"\b(presbyter\w*|independen(t|ts|cy)|congregational\w*|congregationall\w*|synods?|parliament\w*|"
+                      r"magistrat\w*|brownists?|separatists?|sectaries)\b", re.IGNORECASE),
+           "church government / state religion (secondary, of its time)")
+# Added 2026-10-18 for the second-coming passages: the doctrinal basis (Art. 11(I)) only says "the expectation of the
+# second coming"; views on the millennium, the rapture and the antichrist's identity are secondary (same policy).
+_END_TIMES = (re.compile(r"\b(millenni\w*|thousand years|rapture|antichrist\w*|man of sin)\b", re.IGNORECASE),
+              "an end-times timeline view (secondary)")
+# Added 2026-10-18 (same approved policy): in "Visible Churches Warned" Ryle argues the Church of England's evangelical
+# party against the "high" party -- bishops, liturgy, sacraments, "two distinct and separate systems of Christianity".
+# Matched by phrases found ONLY in those paragraphs: a broad word list ("bishop", "Prayer-book") would also have
+# dropped devotional quotations and Ryle's irenic line that true believers "do not all worship God in the same way".
+_RYLE_CHURCH_PARTIES = (re.compile(
+    r"no Church without a bishop|attach no value to Episcopacy|sacraments, Church government, the use of a liturgy|"
+    r"form of Church government was so important|not a word in the charge about the sacraments|"
+    r"called Evangelical clergy|\"low views\"|two distinct and separate systems|religion is a mere corporate business|"
+    r"outward member of any ecclesiastical body|called Evangelical ministers", re.IGNORECASE),
+    "one church party against another (Church of England, 1870s)")
+_BAPTISM = (re.compile(r"\b(baptis\w*|anabaptist\w*|p(a)?edobaptis\w*)\b", re.IGNORECASE), "baptism (a secondary issue)")
 
 # How each book marks its chapter headings.
 _NUMBERED = re.compile(r"^ {0,2}(\d+)\. ([A-Z][A-Za-z',’ -]{2,70})$")           # Watson: "  12. The Trinity"
@@ -49,6 +70,14 @@ _CAPS = re.compile(r"^([A-Z][A-Z ,'?!\.-]{4,60})$")                             
 _OWEN = re.compile(r"^\s+(Chapter [IVXL]+)\.\s*$")                                 # Owen: "      Chapter IV."
 _ROMAN = re.compile(r"^ {0,20}[IVXL]+\.?\s*$")                                     # Ryle: "XIII." then the title line
 _TITLE_LINE = re.compile(r'^ {0,20}["A-Z].{2,45}$')
+_MARKED = re.compile(r"^## (.+)$")                                                 # converted texts: "## Title"
+_MAX_TITLE = 90   # a long 17th-century chapter title is cut (at a word) so citations stay readable
+
+
+def _short_title(title):
+    if len(title) <= _MAX_TITLE:
+        return title
+    return title[:_MAX_TITLE].rsplit(" ", 1)[0].rstrip(",;:") + " ..."
 
 BOOKS = {
     "watson": {
@@ -85,6 +114,81 @@ BOOKS = {
         "skip_passages": [_ELECTION, _POLEMIC],
         "headings": "caps",
     },
+    "irenicum": {
+        "file": "corpus/burroughs_irenicum.txt",
+        "title": "Jeremiah Burroughs, Irenicum: To the Lovers of Truth and Peace (1653)",
+        "cite": "Jeremiah Burroughs, Irenicum",
+        "source": "EEBO-TCP A30587 (github.com/textcreationpartnership/A30587) -- Creative Commons 0. Converted by "
+                  "scripts/convert_tcp.py (old letter forms only; spelling as written). For Art. 11(K), the unity of "
+                  "believers. Approved by Keziah 2026-10-18.",
+        "start": "## ",
+        # 1640s England: the state-toleration debate and Congregational vs Presbyterian church order -- secondary and of
+        # their time (approved policy). The chapters on why believers divide and how to heal it are the point of the book.
+        "skip_chapters": {
+            "The second dividing Principle: All Religions are to be tolerated",
+            "The second Position, Conscience is a tender thing, and must not be medled with",
+            "They who are for a Congregationall way, doe not hold absolute liberty for all Religions",
+            "The fourth dividing Principle, Division is the best way to maintaine Dominion",
+            "The fourth dividing practise, Gathering of Churches disorderly",
+        },
+        "skip_passages": [_ELECTION, _PERSEVERANCE, _POLEMIC, _POLITY, _BAPTISM, _END_TIMES],
+        "headings": "marked",
+    },
+    "henry": {
+        "file": "corpus/henry_selected.txt",
+        "title": "Matthew Henry, Commentary on the Whole Bible (1706-1714) -- selected chapters",
+        "cite": "Matthew Henry, Commentary",
+        "source": "CCEL (ccel.org/ccel/henry/mhc5, mhc6) -- public domain (Romans-Revelation completed from Henry's notes "
+                  "by fellow ministers after 1714). Selected chapters only, converted by scripts/convert_henry.py, for "
+                  "Art. 11(K) unity without discrimination, (I) the second coming, (B) the final judgment, (J) the Church. "
+                  "Approved by Keziah 2026-10-18.",
+        "start": "## ",
+        # Sections not about the gaps being filled (justification and holiness are already well covered; narrative),
+        # and three secondary issues: the spiritual-gifts debate, household roles, baptism.
+        "skip_chapters": {
+            "Acts 1:12-14 -- The Apostles in Jerusalem",
+            "Acts 1:15-26 -- The Death of Judas; Matthias Elected to Be an Apostle",
+            "Acts 10:1-8 -- The Case of Cornelius",
+            "Acts 10:44-48 -- The Effect of Peter's Sermon",
+            "Romans 15:14-16 -- Paul Commends the Brethren",
+            "Romans 15:17-21 -- The Apostle's Labours",
+            "Romans 15:30-33 -- Paul's Desire for the Church's Prayers",
+            "1 Corinthians 12:1-11 -- On Spiritual Gifts",
+            "1 Corinthians 12:27-31 -- On Spiritual Gifts",
+            "2 Corinthians 5:12-15 -- Apology for Seeming Self-Commendation",
+            "2 Corinthians 5:16-21 -- Ministry of the Apostles",
+            "Galatians 3:1-5 -- Justification by Faith",
+            "Galatians 3:6-18 -- Justification by Faith",
+            "Ephesians 2:1-3 -- State of the Ephesians by Nature",
+            "Ephesians 2:4-10 -- The Change Wrought in the Ephesians",
+            "Ephesians 4:17-32 -- Exhortation to Purity and Holiness; Cautions against Sin; Against Grieving the Spirit",
+            "Colossians 3:1-4 -- The Spiritual Life",
+            "Colossians 3:5-7 -- Necessity of Mortifying Sin",
+            "Colossians 3:18-25 -- Relative Duties",
+            "1 Thessalonians 4:1-8 -- Exhortations to Holiness; Caution against Impurity",
+            "1 Thessalonians 5:16-22 -- Various Short Exhortations",
+            "1 Thessalonians 5:23-28 -- Paul's Prayer for the Thessalonians",
+            "James 2:14-26 -- Faith and Works",
+            "2 Peter 3:1-2 -- Adhere to Words of the Prophets and Commandments of the Apostles",
+            # Added for Art. 11(I) after the re-check; the parts not about his return (Matthew 24:1-31 is where the
+            # timeline debates are -- the fall of Jerusalem and the signs; Titus 2:1-10 household roles, secondary).
+            "Matthew 24:1-3 -- Awful Predictions",
+            "Matthew 24:4-31 -- Awful Predictions",
+            "2 Thessalonians 1:1-4 -- Introduction",
+            "2 Thessalonians 1:11-12 -- The Apostle Prayer",
+            "Philippians 3:1-3 -- Description of True Christians",
+            "Philippians 3:4-8 -- False Confidence Renounced",
+            "Philippians 3:9-14 -- The Apostle's Concern, Hope, and Aim",
+            "Philippians 3:15-16 -- Warnings and Exhortations",
+            "Titus 2:1-10 -- Relative Duties",
+            "Titus 2:15 -- Exhortation to Various Duties",
+            "1 John 3:4-10 -- The Mark of God's Children",
+            "1 John 3:20-22 -- The Testimony of Conscience",
+            "1 John 3:23-24 -- God's Commandments",
+        },
+        "skip_passages": [_ELECTION, _PERSEVERANCE, _POLEMIC, _BAPTISM, _END_TIMES],
+        "headings": "marked",
+    },
     "ryle": {
         "file": "corpus/ryle_holiness.txt",
         "title": "J. C. Ryle, Holiness (1879)",
@@ -94,7 +198,7 @@ BOOKS = {
         "start": "INTRODUCTION\n\n   The twenty papers",
         # A polemical chapter on Victorian church controversies (33 mentions of Romanism/Popery/ritualism).
         "skip_chapters": {"WANTS OF THE TIMES"},
-        "skip_passages": [_ELECTION, _PERSEVERANCE, _POLEMIC],
+        "skip_passages": [_ELECTION, _PERSEVERANCE, _POLEMIC, _RYLE_CHURCH_PARTIES],
         "headings": "roman",
     },
 }
@@ -112,6 +216,9 @@ def _heading(style, lines, i):
     if style == "owen":
         m = _OWEN.match(line)
         return m.group(1) if m else None
+    if style == "marked":
+        m = _MARKED.match(line)
+        return m.group(1).strip() if m else None
     if style == "roman":
         if _ROMAN.match(line) and i + 1 < len(lines) and _TITLE_LINE.match(lines[i + 1]):
             return lines[i + 1].strip().strip('"').strip()
@@ -172,8 +279,9 @@ def build(book):
                 left_out.append((title, reason, p))
             else:
                 pieces.extend(_split_long(p))
+        short = _short_title(title)
         for body in _pack(pieces):
-            passages.append((f"{book['cite']}: {title}", f"{book['cite']}, {title}. {body}"))
+            passages.append((f"{book['cite']}: {short}", f"{book['cite']}, {short}. {body}"))
     return passages, left_out
 
 
@@ -215,25 +323,37 @@ def _pack(pieces):
     return passages
 
 
+def _passage_hash(content):
+    import hashlib
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
 def _embeddings(key, passages):
     """
-    Vectors for these exact passages -- reused from corpus/<book>_embeddings.json when the passages haven't changed,
-    so loading a book into a second database (real + demo) doesn't spend Cloudflare's allowance twice.
+    Vectors for these passages -- reused from corpus/<book>_embeddings.json PASSAGE BY PASSAGE (2026-10-18): a
+    passage whose exact text was embedded before gets its saved vector, so loading a book into a second database
+    (real + demo) or leaving a few passages out costs nothing; only genuinely new text is sent to Cloudflare.
+    (It used to match the whole book or nothing -- dropping 12 of Ryle's paragraphs would have re-embedded all 676.)
     """
-    import hashlib
     import json
     from app.services.embeddings import embed_passages, DailyBudgetReached
     cache_path = os.path.join(PROJECT_ROOT, "corpus", f"{key}_embeddings.json")
-    fingerprint = hashlib.sha256("\n".join(c for _, c in passages).encode("utf-8")).hexdigest()
-    vectors = [None] * len(passages)
+    by_hash = {}
     if os.path.exists(cache_path):
-        cached = json.load(open(cache_path, encoding="utf-8"))
-        if cached.get("fingerprint") == fingerprint:
-            vectors = cached["vectors"]
+        by_hash = json.load(open(cache_path, encoding="utf-8")).get("by_hash", {})
+    hashes = [_passage_hash(c) for _, c in passages]
+    vectors = [by_hash.get(h) for h in hashes]
     missing = [i for i, v in enumerate(vectors) if v is None]
     if not missing:
-        print("Reusing the saved embeddings (passages unchanged).")
+        print("Reusing the saved embeddings (every passage embedded before).")
         return vectors
+
+    def save():
+        # Written to a temporary file, then swapped in: a crash mid-write can't leave a half-written cache behind.
+        with open(cache_path + ".tmp", "w", encoding="utf-8") as out:
+            json.dump({"by_hash": by_hash}, out)
+        os.replace(cache_path + ".tmp", cache_path)
+
     # RESUMABLE (2026-10-15): a big book needs more than one day's bulk budget, so embed batch by batch, saving
     # as we go; when the day's budget is reached, stop -- the next run carries on.
     print(f"{len(passages) - len(missing)} of {len(passages)} passages already embedded; embedding the rest.")
@@ -242,7 +362,8 @@ def _embeddings(key, passages):
             batch = missing[start:start + 50]
             for i, vector in zip(batch, embed_passages([passages[i][1] for i in batch])):
                 vectors[i] = vector
-            json.dump({"fingerprint": fingerprint, "vectors": vectors}, open(cache_path, "w", encoding="utf-8"))
+                by_hash[hashes[i]] = vector
+            save()
     except DailyBudgetReached as e:
         done = sum(v is not None for v in vectors)
         sys.exit(f"Stopped at {done} of {len(passages)} passages -- {e}\nNothing is lost: run the same command again tomorrow.")
