@@ -75,6 +75,83 @@ class AWorkerSurvivesADroppedConnection(unittest.TestCase):
             self.assertEqual(handled, ["reply to hi"], "the message queued during the failure was answered")
 
 
+class WorkersRunInTheProcessThatReceivesMessages(unittest.TestCase):
+    """
+    Live bug, 2026-10-18: Render's gunicorn --preload builds the app (and starts the workers) in a parent
+    process, then forks a child to receive webhooks. The child's wake-up reached nobody; replies waited for
+    the parent's hourly scheduler. Simulated here by changing what os.getpid() says.
+    """
+
+    def setUp(self):
+        self.started = []
+        self.saved = (webhook._workers_enabled[0], webhook._workers_pid[0])
+        self.patches = [patch.object(webhook, "start_message_worker",
+                                     lambda: (self.started.append(webhook.os.getpid()),
+                                              webhook._workers_pid.__setitem__(0, webhook.os.getpid())))]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        webhook._workers_enabled[0], webhook._workers_pid[0] = self.saved
+
+    def test_a_forked_child_starts_its_own_workers_once(self):
+        webhook._workers_enabled[0], webhook._workers_pid[0] = True, 1000          # built in the parent, pid 1000
+        with patch.object(webhook.os, "getpid", lambda: 2000):                     # the child receiving webhooks
+            webhook.wake_workers()
+            webhook.wake_workers()
+        self.assertEqual(self.started, [2000], "started in the child, and only once")
+
+    def test_the_same_process_starts_nothing_new(self):
+        webhook._workers_enabled[0], webhook._workers_pid[0] = True, webhook.os.getpid()
+        webhook.wake_workers()
+        self.assertEqual(self.started, [])
+
+    def test_never_where_workers_were_never_switched_on(self):
+        webhook._workers_enabled[0], webhook._workers_pid[0] = False, None         # e.g. the laptop
+        with patch.object(webhook.os, "getpid", lambda: 2000):
+            webhook.wake_workers()
+        self.assertEqual(self.started, [])
+
+
+class EachProcessGetsItsOwnConnections(unittest.TestCase):
+    def setUp(self):
+        self.saved = (database._pool, database._pool_pid, list(database._inherited_pools))
+        self.made = []
+
+        def fake_pool(**kwargs):
+            pool = _FakePool([])
+            self.made.append(pool)
+            return pool
+        self.patches = [patch.object(database.psycopg2.pool, "ThreadedConnectionPool", fake_pool),
+                        patch.object(database.threading, "Thread", lambda **k: type("T", (), {"start": lambda s: None})())]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        database._pool, database._pool_pid, database._inherited_pools[:] = self.saved
+
+    def test_a_child_does_not_use_the_parents_connections(self):
+        parents = _FakePool([_FakeConn()])
+        database._pool, database._pool_pid = parents, 1000
+        with patch.object(database.os, "getpid", lambda: 2000):
+            mine = database._get_pool()
+            again = database._get_pool()
+        self.assertIsNot(mine, parents)
+        self.assertIs(again, mine, "built once per process")
+        self.assertIn(parents, database._inherited_pools, "kept, not closed -- closing would cut the parent's connections")
+        self.assertFalse(parents._pool[0].closed)
+
+    def test_the_same_process_keeps_its_pool(self):
+        current = _FakePool([])
+        database._pool, database._pool_pid = current, database.os.getpid()
+        self.assertIs(database._get_pool(), current)
+        self.assertEqual(self.made, [])
+
+
 class SendsToMetaHaveATimeLimit(unittest.TestCase):
     def test_a_timeout_is_passed(self):
         from app.services import whatsapp_client

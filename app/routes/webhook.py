@@ -114,7 +114,30 @@ _wake_signals = [threading.Event() for _ in range(_NUM_WORKERS)]
 _CLAIM_RETRY_SECONDS = 5
 
 
+# Which process the workers run in (live bug, 2026-10-18). Render starts gunicorn with --preload: the app is
+# built in a PARENT process (workers and scheduler start there), then a CHILD process is forked to receive
+# Meta's webhooks. Threads don't survive a fork, and the wake-up signal is just memory -- so the child rang a
+# bell nobody heard, and messages waited for the parent's hourly scheduler wake (replies at :01 past the hour).
+# Before 2026-10-12 the workers polled the database every half second, which hid this. Now whichever process
+# receives a message makes sure workers are running in THAT process. The parent's workers stay as a backstop:
+# claiming a message is atomic in the database (FOR UPDATE SKIP LOCKED), so two sets can't handle one twice.
+_workers_enabled = [False]      # set where the app decided workers should run (Render, or deliberately)
+_workers_pid = [None]
+_workers_lock = threading.Lock()
+
+
+def _ensure_workers_in_this_process():
+    if not _workers_enabled[0] or _workers_pid[0] == os.getpid():
+        return
+    with _workers_lock:
+        if _workers_pid[0] != os.getpid():
+            print(f"Starting message workers in process {os.getpid()} (it receives the webhooks; "
+                  f"the app was built in process {_workers_pid[0]})")
+            start_message_worker()
+
+
 def wake_workers():
+    _ensure_workers_in_this_process()
     for signal in _wake_signals:
         signal.set()
 
@@ -171,6 +194,9 @@ def _process_queue_shard(shard_index):
 
 
 def start_message_worker():
+    _workers_enabled[0] = True
+    _workers_pid[0] = os.getpid()
+    print(f"Message workers running in process {os.getpid()}")
     for shard_index in range(_NUM_WORKERS):
         threading.Thread(target=_process_queue_shard, args=(shard_index,), daemon=True).start()
 

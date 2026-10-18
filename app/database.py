@@ -60,6 +60,13 @@ from psycopg2.extras import RealDictCursor
 
 _pool = None
 _pool_lock = threading.Lock()
+# Live bug, 2026-10-18 (see app/routes/webhook.py, _ensure_workers_in_this_process): with gunicorn --preload
+# the pool -- and its open connections -- is created in the parent, then inherited by the forked child, so two
+# processes would share the same sockets and could scramble each other's queries. Each process now builds its
+# own pool. The inherited one is set aside, NOT closed: closing would end the parent's live connections too.
+# It's kept referenced so it's never garbage-collected (which would close them).
+_pool_pid = None
+_inherited_pools = []
 
 _IDLE_CHECK_SECONDS = 60
 
@@ -93,7 +100,13 @@ def _get_pool():
     itself) up front keeps that cost where it belongs: app startup,
     not live traffic.
     """
-    global _pool
+    global _pool, _pool_pid
+    if _pool is not None and _pool_pid != os.getpid():
+        with _pool_lock:
+            if _pool is not None and _pool_pid != os.getpid():
+                print(f"Process {os.getpid()}: opening its own database connections (not the parent's)")
+                _inherited_pools.append(_pool)
+                _pool = None
     if _pool is None:
         with _pool_lock:
             if _pool is None:  # re-check -- another thread may have created it while we waited for the lock
@@ -109,6 +122,7 @@ def _get_pool():
                     minconn=6, maxconn=10, dsn=database_url, cursor_factory=RealDictCursor,
                     connect_timeout=15, keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
                 )
+                _pool_pid = os.getpid()
                 threading.Thread(target=_close_idle_connections_forever, args=(_pool,), daemon=True).start()
     return _pool
 
