@@ -82,40 +82,7 @@ def looks_like_new_request(text):
     return len(words) >= 4 or bool(words and _QUESTION_START.match(" ".join(words)))
 
 
-HELP_TEXT = (
-    "Here's what I can help with:\n"
-    "• What DeKUTCU believes and how it's run (just ask)\n"
-    "• Your Bible Study group and who leads it\n"
-    "• Upcoming events -- and RSVPing to them\n"
-    "• Buying this semester's study guide\n"
-    "• Sharing feedback, or asking a question for the leaders\n"
-    "• Connecting you with a leader, or DeKUTCU's contact details\n"
-    "• Changing your WhatsApp number -- tell me first (\"I'm changing my number\")\n\n"
-    "Just type what you need in your own words. (Text STOP to pause check-ins.)"
-)
-
-LEADER_HELP_TEXT = (
-    "\n\nAs a leader, you can also:\n"
-    "• Announce something to members (\"I want to announce...\") -- everyone or one area\n"
-    "• Ask for reports (\"who's been missing Bible Study?\") or the reports website link\n"
-    "• Send today's attendance check-in (\"send the check-in\")\n"
-    "• Allocate new members to groups, nominate group leaders, record exec roles\n"
-    "• Start this semester's study guide (\"start a new study guide\"), see \"guide stock\""
-)
-
-COORDINATOR_HELP_TEXT = (
-    "\n\nAs the Guides Coordinator, you can also:\n"
-    "• Give a batch of guides to a group leader (\"give guides to a leader\")\n"
-    "• Hand guides to members with no group leader (\"hand over guides\")\n"
-    "• See every leader's stock (\"guide stock\"), and start a new guide"
-)
-
-GROUP_LEADER_HELP_TEXT = (
-    "\n\nAs a group leader, you can also:\n"
-    "• Announce something to your group (\"I want to announce...\")\n"
-    "• Ask how your group is doing (\"how is my group's attendance?\") or the reports website link\n"
-    "• Hand out study guides (\"hand over guides\"); confirm a batch you received (\"RECEIVED 10\")"
-)
+# The help menu and its guides live in app/services/help_guide.py (2026-10-16).
 
 _HELP_WORDS = {"help", "menu", "main menu", "start", "/start", "options", "what can you do",
                "what can you help with", "what do you do", "commands", "how does this work",

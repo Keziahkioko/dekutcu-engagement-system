@@ -616,7 +616,7 @@ class Announcements(unittest.TestCase):
 
     def test_leader_help_lists_leader_features(self):
         leader = student(name="Ann Leader", leader=True)
-        self.assertIn("As a leader, you can also", H.say(leader, "help"))
+        self.assertIn("As an exec leader:", H.say(leader, "help"))
         self.assertNotIn("As a leader", H.say(student(), "help"))
 
 

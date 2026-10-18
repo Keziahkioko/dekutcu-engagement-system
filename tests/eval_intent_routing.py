@@ -31,6 +31,19 @@ ACTIONS = {"withdraw_data_consent", "unsubscribe_followup", "allocate_groups", "
            "start_study_guide", "purchase_study_guide", "event_rsvp", "update_details"}
 
 CASES = [
+    # the self-taught guide (app_help, 2026-10-16) -- "how do I use it" questions, or the feature itself
+    ("how do I RSVP?", {"app_help", "event_rsvp"}), ("how does the check-in work?", {"app_help"}),
+    ("how do I change my number?", {"app_help", "change_number"}), ("how do I stop the check-ins?", {"app_help", "unsubscribe_followup"}),
+    ("how do I announce to my group?", {"app_help", "send_announcement"}), ("how do I claim a case?", {"app_help"}),
+    ("how do I use this bot", {"app_help"}), ("what can I do here?", {"app_help", "greeting_smalltalk", "unclear"}),
+    ("jinsi ya kutumia hii bot", {"app_help"}), ("how do I buy the guide?", {"app_help", "purchase_study_guide"}),
+    ("how do I give feedback?", {"app_help", "feedback_response"}),
+    # ... and faith/life "how do I" questions must NOT become app_help
+    ("How do I get to heaven?", {"general_question", "pastoral_question"}), ("how do I pray?", {"general_question", "pastoral_question"}),
+    ("how do I deal with stress?", {"pastoral_question", "needs_support", "general_question"}),
+    ("How do I become a Christian?", {"general_question", "pastoral_question"}),
+    ("how do I forgive someone who hurt me?", {"pastoral_question", "general_question"}),
+    ("I want to RSVP for worship night", {"event_rsvp"}), ("buy the study guide", {"purchase_study_guide"}),
     # basic / Sheng greetings
     ("Hi", {"greeting_smalltalk"}), ("Niaje", {"greeting_smalltalk"}), ("Sasa", {"greeting_smalltalk"}),
     ("Good evening", {"greeting_smalltalk"}), ("What's up?", {"greeting_smalltalk", "unclear"}),

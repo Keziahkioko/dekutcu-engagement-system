@@ -89,6 +89,7 @@ from app.services import conversation
 from app.services import announcements
 from app.services import number_change
 from app.services import guide_coordinator
+from app.services import help_guide
 from app.services import guide_batches
 from app.services import guide_handover
 from app.services import study_guides
@@ -137,6 +138,7 @@ INTENT_DEFINITIONS = {
     "remove_group_leader": "A leader wanting to remove someone as a group leader.",
     "resolve_reassignments": "A leader wanting to review and act on pending member area-change reassignments.",
     "send_checkin": "A leader wanting to send out the 'were you at today's fellowship/service?' attendance check-in (and feedback question) to members right now, usually as a session is ending.",
+    "app_help": "Asking HOW TO USE this WhatsApp bot or one of its features -- how to RSVP, buy the study guide, answer a check-in, change their number, stop messages, announce, claim a case, etc. (e.g. 'how do I RSVP?', 'how does the check-in work?', 'how do I announce to my group?'). NOT asking the bot to actually do it right now ('I want to RSVP' is event_rsvp), and NOT faith or life questions ('how do I get to heaven?', 'how do I pray?' are general_question / pastoral_question).",
     "unclear": "Doesn't confidently match any of the above.",
 }
 
@@ -883,15 +885,17 @@ def handle_message(whatsapp_id, message_text):
     member = get_member_by_whatsapp_id(whatsapp_id)
     # Answered without the AI (QA 2026-10-01): "help"/"menu" got "Sorry, I didn't
     # quite catch that", and "cancel"/"start over" with nothing in progress the same.
+    # The self-taught guide (2026-10-16, app/services/help_guide.py): "help" -> this person's numbered menu;
+    # "explain 3" -> that guide (a bare "3" only right after the menu). Logged to the history like any
+    # exchange, so the next message can tell the menu was the bot's last reply.
     if conversation.is_help_request(message_text):
-        if member["is_leader"]:
-            return conversation.HELP_TEXT + conversation.LEADER_HELP_TEXT
-        extra = conversation.GROUP_LEADER_HELP_TEXT if member["leads_group_label"] else ""
-        if guide_coordinator.is_coordinator(member):
-            extra += conversation.COORDINATOR_HELP_TEXT
-        return conversation.HELP_TEXT + extra
+        return _log_and_return(whatsapp_id, message_text, help_guide.menu_text(member))
     if conversation.is_cancel(message_text):
-        return "There's nothing in progress to cancel -- you're all clear.\n\n" + conversation.HELP_TEXT
+        return "There's nothing in progress to cancel -- you're all clear.\n\n" + help_guide.menu_text(member)
+    bare_number = message_text.strip().lstrip("#").rstrip(".!").isdigit()
+    choice = help_guide.menu_choice(message_text, after_menu=bare_number and help_guide.last_reply_was_menu(whatsapp_id))
+    if choice is not None:
+        return _log_and_return(whatsapp_id, message_text, help_guide.explain_number(member, choice))
     intent = classify_intent(message_text, whatsapp_id)
 
     # Group leaders (not exec) may ask for reports -- about their OWN group
@@ -908,9 +912,12 @@ def handle_message(whatsapp_id, message_text):
     handler = _STUB_HANDLERS.get(intent, _handle_unclear)
     reply = handler(member, message_text)
 
+    return _log_and_return(whatsapp_id, message_text, reply)
+
+
+def _log_and_return(whatsapp_id, message_text, reply):
     log_conversation_message(whatsapp_id, "user", message_text)
     log_conversation_message(whatsapp_id, "assistant", reply)
-
     return reply
 
 
@@ -1011,5 +1018,6 @@ _STUB_HANDLERS = {
     "resolve_reassignments": _handle_resolve_reassignments,
     "send_checkin": _handle_send_checkin,
     "set_exec_roles": lambda member, text: exec_roles.start(member["whatsapp_id"]),
+    "app_help": lambda member, text: help_guide.answer_how_to(member, text),
     "unclear": _handle_unclear,
 }
