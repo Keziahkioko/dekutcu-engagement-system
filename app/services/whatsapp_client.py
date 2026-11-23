@@ -69,7 +69,8 @@ def _send_text(to_number, message_text):
             code = error.get("code")
             subcode = error.get("error_subcode")
             trace = error.get("fbtrace_id")
-            print(f"Failed to send message to masked={to_number[-4:]}. Status: {response.status_code}, code={code}, subcode={subcode}, trace={trace}")
+            message = error.get("message")
+            print(f"Failed to send message to masked={to_number[-4:]}. Status: {response.status_code}, code={code}, subcode={subcode}, trace={trace}, meta_message={message}")
         except Exception:
             print(f"Failed to send message to masked={to_number[-4:]}. Status: {response.status_code}")
     return response
