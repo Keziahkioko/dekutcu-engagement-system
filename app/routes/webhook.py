@@ -178,6 +178,7 @@ def _process_queue_shard(shard_index):
             continue
         try:
             reply_text = route_incoming_message(message["sender_number"], message["message_text"])
+            print(f"Route completed for masked={message['sender_number'][-4:]}, reply={reply_text is not None}")
             send_whatsapp_message(to_number=message["sender_number"],
                                   message_text=reply_text or "Sorry, I didn't quite catch that -- could you say it another way?")
         except Exception as e:
