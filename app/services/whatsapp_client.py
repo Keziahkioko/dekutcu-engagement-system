@@ -64,7 +64,14 @@ def _send_text(to_number, message_text):
     if response.status_code == 200:
         print(f"Message sent successfully to masked={to_number[-4:]}")
     else:
-        print(f"Failed to send message to masked={to_number[-4:]}. Status: {response.status_code}")
+        try:
+            error = response.json().get("error", {})
+            code = error.get("code")
+            subcode = error.get("error_subcode")
+            trace = error.get("fbtrace_id")
+            print(f"Failed to send message to masked={to_number[-4:]}. Status: {response.status_code}, code={code}, subcode={subcode}, trace={trace}")
+        except Exception:
+            print(f"Failed to send message to masked={to_number[-4:]}. Status: {response.status_code}")
     return response
 
 
