@@ -280,7 +280,9 @@ def _accept_message(message):
     """
     sender_number = message["from"]
     message_id = message.get("id")
-    print(f"Webhook inbound received from masked={sender_number[-4:]}, type={message.get('type', 'text')}")
+    sender_format = sender_number.isdigit() and 10 <= len(sender_number) <= 15
+    print(f"Webhook inbound received from masked={sender_number[-4:]}, type={message.get('type', 'text')}, "
+          f"length={len(sender_number)}, international_phone={sender_format}")
     if message_id and not claim_message_id(message_id):
         print(f"Ignoring a repeat delivery of message {message_id}")
         return
