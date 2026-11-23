@@ -62,9 +62,9 @@ def _post(payload):
 def _send_text(to_number, message_text):
     response = _post({"to": to_number, "type": "text", "text": {"body": message_text}})
     if response.status_code == 200:
-        print(f"Message sent successfully to {to_number}")
+        print(f"Message sent successfully to masked={to_number[-4:]}")
     else:
-        print(f"Failed to send message. Status: {response.status_code}, Response: {response.text}")
+        print(f"Failed to send message to masked={to_number[-4:]}. Status: {response.status_code}")
     return response
 
 
