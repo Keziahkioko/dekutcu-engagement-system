@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from app.routes.webhook import webhook_bp, start_message_worker
 from app.routes.dashboard import dashboard_bp
 from app.routes.mpesa import mpesa_bp
+from app.routes.privacy import privacy_bp
 from app.services.dashboard import SESSION_LIFETIME
 from app.models.dashboard_login import init_dashboard_login_table
 from app.models.member import init_members_table
@@ -80,6 +81,7 @@ def create_app():
     app.register_blueprint(webhook_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(mpesa_bp)
+    app.register_blueprint(privacy_bp)
 
     # The reports website's login session (Stage 13 -- see
     # app/routes/dashboard.py). Signed with DASHBOARD_SECRET_KEY; with no
