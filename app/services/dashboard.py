@@ -64,8 +64,28 @@ def _q(sql, params=()):
     return rows
 
 
+def _bible_study_self_report_enabled():
+    from app.services.fellowship_checkin import bible_study_self_report
+    return bible_study_self_report()
+
+
 def bible_study_weekly(days, group_label=None):
-    """Attendance rate per week (from recorded markings), optionally for one group."""
+    """Weekly Bible Study figures, using the configured attendance source."""
+    if _bible_study_self_report_enabled():
+        if group_label:
+            return []
+        rows = _q("""
+            SELECT date_trunc('week', b.checkin_date)::date AS week,
+                   COUNT(DISTINCT b.checkin_date) AS sessions, COUNT(c.id) AS present_replies
+            FROM checkin_broadcasts b
+            LEFT JOIN fellowship_checkins c
+              ON c.activity_type = b.activity_type AND c.checkin_date = b.checkin_date
+            WHERE b.activity_type = 'bible_study' AND b.checkin_date >= CURRENT_DATE - %s
+            GROUP BY 1 ORDER BY 1
+        """, (days,))
+        return [{"week": str(r["week"]), "sessions": r["sessions"],
+                 "present_replies": r["present_replies"]} for r in rows]
+
     where, params = "activity_date >= CURRENT_DATE - %s", [days]
     if group_label:
         where += " AND group_label = %s"
@@ -87,12 +107,13 @@ def fellowship_weekly(days):
     not a 0 -- so the current week doesn't look like a collapse. 0 means
     a check-in went out and nobody said they attended.
     """
-    rows = _q("""
+    bible_study_filter = "AND b.activity_type <> 'bible_study'" if _bible_study_self_report_enabled() else ""
+    rows = _q(f"""
         SELECT date_trunc('week', b.checkin_date)::date AS week, b.activity_type,
                COUNT(c.id) AS present
         FROM checkin_broadcasts b
         LEFT JOIN fellowship_checkins c ON c.activity_type = b.activity_type AND c.checkin_date = b.checkin_date
-        WHERE b.checkin_date >= CURRENT_DATE - %s
+        WHERE b.checkin_date >= CURRENT_DATE - %s {bible_study_filter}
         GROUP BY 1, 2 ORDER BY 1
     """, (days,))
     weeks = sorted({str(r["week"]) for r in rows})

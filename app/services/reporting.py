@@ -72,45 +72,74 @@ def _pct(part, whole):
     return None if not whole else round(100 * part / whole)
 
 
+def _bible_study_self_report_enabled():
+    from app.services.fellowship_checkin import bible_study_self_report
+    return bible_study_self_report()
+
+
 # ---------------------------------------------------------------------
 # The lookups. Each returns a small, privacy-safe dict.
 # ---------------------------------------------------------------------
 
 def attendance_summary(days=30, group_label=None):
     days = _days(days)
-    where, params = "activity_date >= CURRENT_DATE - %s", [days]
-    if group_label:
-        where += " AND group_label = %s"
-        params.append(group_label)
-    markings = _q(f"""
-        SELECT group_label, COUNT(*) AS sessions_marked,
-               SUM(roster_size) AS roster_total, SUM(absent_count) AS absent_total
-        FROM attendance_markings WHERE {where} GROUP BY group_label ORDER BY group_label
-    """, params)
-    bible_study = [{
-        "group": m["group_label"],
-        "sessions_marked": m["sessions_marked"],
-        "attendance_rate_percent": _pct(m["roster_total"] - m["absent_total"], m["roster_total"]),
-    } for m in markings]
-    result = {"period_days": days, "bible_study": bible_study}
+    self_report_mode = _bible_study_self_report_enabled()
+    result = {"period_days": days, "bible_study": [], "self_report_mode": self_report_mode}
+    if self_report_mode:
+        result["groups_with_no_marking"] = []
+        result["group_level_self_report_available"] = False
+        if group_label:
+            return result
+        stats = _q("""
+            SELECT COUNT(DISTINCT b.checkin_date) AS sessions, COUNT(c.id) AS said_present,
+                   (SELECT COUNT(*) FROM absences
+                    WHERE activity_type = 'bible_study' AND activity_date >= CURRENT_DATE - %s) AS absences
+            FROM checkin_broadcasts b
+            LEFT JOIN fellowship_checkins c
+              ON c.activity_type = b.activity_type AND c.checkin_date = b.checkin_date
+            WHERE b.activity_type = 'bible_study' AND b.checkin_date >= CURRENT_DATE - %s
+        """, (days, days))[0]
+        result["bible_study_self_report"] = {
+            "check_in_sessions": stats["sessions"],
+            "present_replies": stats["said_present"],
+            "absences_recorded": stats["absences"],
+        }
+    else:
+        where, params = "activity_date >= CURRENT_DATE - %s", [days]
+        if group_label:
+            where += " AND group_label = %s"
+            params.append(group_label)
+        markings = _q(f"""
+            SELECT group_label, COUNT(*) AS sessions_marked,
+                   SUM(roster_size) AS roster_total, SUM(absent_count) AS absent_total
+            FROM attendance_markings WHERE {where} GROUP BY group_label ORDER BY group_label
+        """, params)
+        result["bible_study"] = [{
+            "group": m["group_label"],
+            "sessions_marked": m["sessions_marked"],
+            "attendance_rate_percent": _pct(m["roster_total"] - m["absent_total"], m["roster_total"]),
+        } for m in markings]
     if group_label:
         return result
 
-    unmarked = _q("""
-        SELECT DISTINCT group_label FROM members
-        WHERE group_label IS NOT NULL AND group_label NOT IN (
-            SELECT group_label FROM attendance_markings WHERE activity_date >= CURRENT_DATE - %s)
-        ORDER BY group_label
-    """, (days,))
-    result["groups_with_no_marking"] = [r["group_label"] for r in unmarked]
+    if not self_report_mode:
+        unmarked = _q("""
+            SELECT DISTINCT group_label FROM members
+            WHERE group_label IS NOT NULL AND group_label NOT IN (
+                SELECT group_label FROM attendance_markings WHERE activity_date >= CURRENT_DATE - %s)
+            ORDER BY group_label
+        """, (days,))
+        result["groups_with_no_marking"] = [r["group_label"] for r in unmarked]
 
-    fellowships = _q("""
+    bible_study_filter = "AND b.activity_type <> 'bible_study'" if self_report_mode else ""
+    fellowships = _q(f"""
         SELECT b.activity_type, COUNT(DISTINCT b.checkin_date) AS sessions,
                (SELECT COUNT(*) FROM fellowship_checkins c WHERE c.activity_type = b.activity_type
                   AND c.checkin_date >= CURRENT_DATE - %s) AS said_present,
                (SELECT COUNT(*) FROM absences a WHERE a.activity_type = b.activity_type
                   AND a.activity_date >= CURRENT_DATE - %s) AS absences
         FROM checkin_broadcasts b WHERE b.checkin_date >= CURRENT_DATE - %s
+          {bible_study_filter}
         GROUP BY b.activity_type
     """, (days, days, days))
     result["fellowships"] = [{
@@ -129,14 +158,17 @@ def lapsing_members(group_label=None):
     Three queries in total, whatever the amount of history (it used to be one query per member per
     activity -- 291 seconds on a simulated semester). Streaks use the same rule as the bandit
     (absence.weekly_streak). A streak only counts if the member hasn't come back since:
-      - Bible Study: their group was marked on a later date and they weren't on that date's absent list;
+      - Bible Study: a later leader marking in legacy mode, or a later self-report in self-report mode;
       - fellowships: they later replied that they attended.
     Silence is NOT coming back -- the system never guesses attendance.
     """
+    self_report_mode = _bible_study_self_report_enabled()
     where, params = "", [_LAPSING_LOOKBACK_DAYS]
     if group_label:
         where = "AND m.group_label = %s"
         params.append(group_label)
+        if self_report_mode:
+            where += " AND a.activity_type <> 'bible_study'"
     rows = _q(f"""
         SELECT a.reg_number, a.activity_type, a.activity_date, a.reason_category, m.name, m.group_label
         FROM absences a JOIN members m ON m.reg_number = a.reg_number
@@ -157,7 +189,7 @@ def lapsing_members(group_label=None):
     lapsing = []
     for (reg_number, activity_type), absences in by_pair.items():
         latest = absences[0]
-        if activity_type == "bible_study":
+        if activity_type == "bible_study" and not self_report_mode:
             came_back = (last_marked.get(latest["group_label"]) or date.min) > latest["activity_date"]
         else:
             came_back = (last_present.get((reg_number, activity_type)) or date.min) > latest["activity_date"]
@@ -419,15 +451,25 @@ _DAYS_PROP = {"days": {"type": "integer", "description": "How many days back to 
 
 def _build_tools(member):
     tools, dispatch = [], {}
+    self_report_mode = _bible_study_self_report_enabled()
     if member.get("leads_group_label"):
         group = member["leads_group_label"]
-        tools.append(_tool("my_group_report", f"Attendance, lapsing members and study-guide copies for the group you lead ({group}).", _DAYS_PROP))
+        group_description = f"Attendance, lapsing members and study-guide copies for the group you lead ({group})."
+        if self_report_mode:
+            group_description += " Bible Study self-reports are not available by group."
+        tools.append(_tool("my_group_report", group_description, _DAYS_PROP))
         dispatch["my_group_report"] = lambda days=30, **kw: {
             "attendance": attendance_summary(days, group_label=group), "lapsing": lapsing_members(group_label=group),
             "study_guides": my_group_guides(group)}
     if member.get("is_leader"):
+        attendance_description = (
+            "Bible Study self-report session and response counts (not an attendance rate), "
+            "plus fellowship check-ins; group-level Bible Study self-reports are unavailable."
+            if self_report_mode else
+            "Org-wide Bible Study attendance per group, groups with no marking, and fellowship check-ins."
+        )
         tools += [
-            _tool("attendance_summary", "Org-wide Bible Study attendance per group, groups with no marking, and fellowship check-ins.", _DAYS_PROP),
+            _tool("attendance_summary", attendance_description, _DAYS_PROP),
             _tool("lapsing_members", "Members currently missing sessions repeatedly (2+ in a row), with the reason category."),
             _tool("absence_reasons", "Counts of why members missed sessions, by category.", _DAYS_PROP),
             _tool("escalation_summary", "Escalation cases: totals, claimed/unclaimed, response times, open cases.", _DAYS_PROP),
@@ -463,8 +505,10 @@ _SYSTEM_PROMPT = (
     "*single asterisks* for bold, no tables or headings). Report only what the tools return: never "
     "invent numbers, names or trends, and never add names the tools didn't give you. If a figure is "
     "missing or zero, say so plainly rather than guessing why. Mention small numbers honestly (e.g. "
-    "'only 3 sessions marked so far'). If the question isn't covered by any tool, say what you CAN "
-    "report on."
+    "'only 3 sessions marked so far'). For attendance, check self_report_mode: when true, use the "
+    "self-report session/reply/absence counts; an empty leader-marking list does not mean nobody "
+    "attended, and group-level self-report figures are unavailable. If the question isn't covered by "
+    "any tool, say what you CAN report on."
 )
 
 
@@ -508,13 +552,26 @@ def build_weekly_digest():
     cq = companion_questions(7)
 
     lines = ["*DeKUTCU weekly summary* (last 7 days)", ""]
-    bs = att["bible_study"]
-    if bs:
-        rates = [g["attendance_rate_percent"] for g in bs if g["attendance_rate_percent"] is not None]
-        avg = f"{round(sum(rates) / len(rates))}% average attendance" if rates else "no attendance figures"
-        lines.append(f"Bible Study: {len(bs)} group(s) marked attendance, {avg}.")
+    if att["self_report_mode"]:
+        bs = att["bible_study_self_report"]
+        if bs["check_in_sessions"] or bs["absences_recorded"]:
+            session_label = "session" if bs["check_in_sessions"] == 1 else "sessions"
+            absence_label = "absence" if bs["absences_recorded"] == 1 else "absences"
+            lines.append(
+                f"Bible Study: {bs['present_replies']} self-reported present replies across "
+                f"{bs['check_in_sessions']} self-report check-in {session_label}; "
+                f"{bs['absences_recorded']} {absence_label} recorded."
+            )
+        else:
+            lines.append("Bible Study: no self-report check-in was sent this week.")
     else:
-        lines.append("Bible Study: no attendance was marked this week.")
+        bs = att["bible_study"]
+        if bs:
+            rates = [g["attendance_rate_percent"] for g in bs if g["attendance_rate_percent"] is not None]
+            avg = f"{round(sum(rates) / len(rates))}% average attendance" if rates else "no attendance figures"
+            lines.append(f"Bible Study: {len(bs)} group(s) marked attendance, {avg}.")
+        else:
+            lines.append("Bible Study: no attendance was marked this week.")
     if att["groups_with_no_marking"]:
         lines.append(f"Groups with no marking: {len(att['groups_with_no_marking'])}.")
     for f in att["fellowships"]:

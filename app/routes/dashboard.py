@@ -181,15 +181,28 @@ def overview(member):
     membership = reporting.membership_summary(days)
 
     bs_weekly = dashboard.bible_study_weekly(days)
-    rates = [g["attendance_rate_percent"] for g in attendance["bible_study"] if g["attendance_rate_percent"] is not None]
+    if attendance["self_report_mode"]:
+        bs_summary = attendance["bible_study_self_report"]
+        bible_study_kpi = {
+            "label": "Bible Study self-reported present replies", "icon": "attendance", "unit": " replies",
+            "value": bs_summary["present_replies"] if bs_summary["check_in_sessions"] else None,
+            "trend": dashboard.trend([w["present_replies"] for w in bs_weekly]),
+            "trend_unit": " replies",
+            "hint": "Self-reported replies in this period; not an attendance rate",
+        }
+    else:
+        rates = [g["attendance_rate_percent"] for g in attendance["bible_study"] if g["attendance_rate_percent"] is not None]
+        bible_study_kpi = {
+            "label": "Bible Study attendance", "icon": "attendance", "unit": "%",
+            "value": round(sum(rates) / len(rates)) if rates else None,
+            "trend": dashboard.trend([w["rate"] for w in bs_weekly]), "trend_unit": " pt",
+            "hint": f"Average across {len(rates)} group{'s' if len(rates) != 1 else ''} that marked attendance",
+        }
     fellowship = dashboard.fellowship_weekly(days)
     fellowship_avg = dashboard.fellowship_average_per_week(fellowship)
     held = [v for v in fellowship_avg if v is not None]
     kpis = [
-        {"label": "Bible Study attendance", "icon": "attendance", "unit": "%",
-         "value": round(sum(rates) / len(rates)) if rates else None,
-         "trend": dashboard.trend([w["rate"] for w in bs_weekly]), "trend_unit": " pt",
-         "hint": f"Average across {len(rates)} group{'s' if len(rates) != 1 else ''} that marked attendance"},
+        bible_study_kpi,
         {"label": "At each fellowship", "icon": "smile", "unit": " people",
          "value": round(sum(held) / len(held)) if held else None,
          "trend": dashboard.fellowship_trend(fellowship), "trend_unit": "",

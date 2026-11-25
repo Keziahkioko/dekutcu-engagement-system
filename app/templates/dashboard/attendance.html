@@ -6,9 +6,15 @@
 {% block content %}
 <div class="grid two">
   <div class="card">
+    {% if attendance.self_report_mode %}
+    <h3>Bible Study self-reports</h3>
+    <p class="sub">Members who said they were present, week by week. This is a response count, not an attendance rate.</p>
+    {% else %}
     <h3>Bible Study attendance</h3>
     <p class="sub">Share of members present, week by week, from the group leaders' marking.</p>
+    {% endif %}
     {% if bible_study_weekly %}<div class="chart"><canvas id="bsChart"></canvas></div>
+    {% elif attendance.self_report_mode %}{{ empty("No Bible Study self-report check-ins in this period yet.") }}
     {% else %}{{ empty("No attendance marked in this period yet.") }}{% endif %}
   </div>
   <div class="card">
@@ -34,6 +40,18 @@
   {% else %}{{ empty("Nobody is on a missed-session streak right now.") }}{% endif %}
 </div>
 
+{% if attendance.self_report_mode %}
+<div class="section"><h2>Bible Study self-report totals</h2><p>{{ periods[days] }}</p></div>
+<div class="card">
+  {% set bs = attendance.bible_study_self_report %}
+  {% if bs.check_in_sessions or bs.absences_recorded %}
+  <p><b>Check-in sessions:</b> {{ bs.check_in_sessions }}<br>
+     <b>Self-reported present replies:</b> {{ bs.present_replies }}<br>
+     <b>Absences recorded:</b> {{ bs.absences_recorded }}</p>
+  {% else %}{{ empty("No Bible Study self-report check-ins in this period yet.") }}{% endif %}
+  <p class="how"><span>Self-reports are not stored with a group snapshot, so group-level totals and attendance percentages are unavailable.</span></p>
+</div>
+{% else %}
 <div class="section"><h2>Bible Study groups</h2><p>{{ periods[days] }}</p></div>
 <div class="card">
   {% if attendance.bible_study %}
@@ -51,6 +69,7 @@
     Their leaders get the "who was absent?" question after each session.</span></p>
   {% endif %}
 </div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
@@ -59,9 +78,15 @@
   if (bs.length) new Chart(document.getElementById('bsChart'), {
     type: 'line',
     data: { labels: bs.map(w => DK.week(w.week)),
-            datasets: [{ label: 'Attendance %', data: bs.map(w => w.rate), borderColor: DK.palette[0],
+            datasets: [{ label: {{ "'Present replies'" if attendance.self_report_mode else "'Attendance %'" }},
+                         data: bs.map(w => {{ 'w.present_replies' if attendance.self_report_mode else 'w.rate' }}),
+                         borderColor: DK.palette[0],
                          backgroundColor: DK.palette[0] + '22', fill: true }] },
-    options: { scales: { y: { min: 0, max: 100, ticks: { callback: v => v + '%' } } }, plugins: { legend: { display: false } } }
+    options: { scales: { y: {
+      min: 0,
+      {% if not attendance.self_report_mode %}max: 100,{% else %}beginAtZero: true,{% endif %}
+      ticks: { {% if attendance.self_report_mode %}precision: 0{% else %}callback: v => v + '%'{% endif %} }
+    } }, plugins: { legend: { display: false } } }
   });
   const fw = {{ fellowship_weekly | tojson }};
   if (fw.weeks.length) new Chart(document.getElementById('fwChart'), {

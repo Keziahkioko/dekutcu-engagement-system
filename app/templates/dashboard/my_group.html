@@ -6,9 +6,15 @@
 {% block content %}
 {% set mine = attendance.bible_study[0] if attendance.bible_study else none %}
 <div class="grid kpis">
+  {% if attendance.self_report_mode %}
+  <div class="card kpi"><div class="label">{{ icon('attendance') }}Bible Study attendance</div>
+    <div class="value">—</div>
+    <div class="hint">Self-reports are not stored with a group snapshot, so group-level figures are unavailable.</div></div>
+  {% else %}
   <div class="card kpi"><div class="label">{{ icon('attendance') }}Attendance</div>
     <div class="value">{% if mine and mine.attendance_rate_percent is not none %}{{ mine.attendance_rate_percent }}<small>%</small>{% else %}—{% endif %}</div>
     <div class="hint">{{ mine.sessions_marked if mine else 0 }} session(s) marked in this period</div></div>
+  {% endif %}
   <div class="card kpi"><div class="label">{{ icon('alert') }}Missing repeatedly</div>
     <div class="value">{{ lapsing | length }}</div><div class="hint">2 or more sessions in a row</div></div>
   {% if guides.current_guide %}
@@ -19,9 +25,14 @@
 </div>
 
 <div class="card" style="margin-top:14px">
+  {% if attendance.self_report_mode %}
+  <h3>Bible Study self-reports</h3>
+  <p class="sub">Group-level figures are unavailable because self-reports are not stored with a group snapshot.</p>
+  {% else %}
   <h3>Attendance, week by week</h3>
   {% if bible_study_weekly %}<div class="chart"><canvas id="bsChart"></canvas></div>
   {% else %}{{ empty("No attendance marked for your group in this period yet.") }}{% endif %}
+  {% endif %}
 </div>
 
 <div class="section"><h2>Members missing repeatedly</h2></div>
