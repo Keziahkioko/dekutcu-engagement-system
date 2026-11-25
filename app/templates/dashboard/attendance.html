@@ -74,8 +74,30 @@
 
 {% block scripts %}
 <script>
+  function showChartFallback(canvas, error) {
+    if (error) console.error(`Could not render attendance chart ${canvas.id}.`, error);
+    const chart = canvas.parentNode;
+    const message = document.createElement('div');
+    message.className = 'empty';
+    message.textContent = 'This chart could not be displayed. Refresh the page to try again.';
+    chart.parentNode.replaceChild(message, chart);
+  }
+
+  function renderChart(canvasId, config) {
+    const canvas = document.getElementById(canvasId);
+    if (typeof Chart === 'undefined') {
+      showChartFallback(canvas);
+      return;
+    }
+    try {
+      new Chart(canvas, config);
+    } catch (error) {
+      showChartFallback(canvas, error);
+    }
+  }
+
   const bs = {{ bible_study_weekly | tojson }};
-  if (bs.length) new Chart(document.getElementById('bsChart'), {
+  if (bs.length) renderChart('bsChart', {
     type: 'line',
     data: { labels: bs.map(w => DK.week(w.week)),
             datasets: [{ label: {{ "'Present replies'" if attendance.self_report_mode else "'Attendance %'" }},
@@ -89,7 +111,7 @@
     } }, plugins: { legend: { display: false } } }
   });
   const fw = {{ fellowship_weekly | tojson }};
-  if (fw.weeks.length) new Chart(document.getElementById('fwChart'), {
+  if (fw.weeks.length) renderChart('fwChart', {
     type: 'bar',
     data: { labels: fw.weeks.map(DK.week),
             datasets: Object.entries(fw.series).map(([name, data], i) => ({ label: name, data: data, backgroundColor: DK.palette[i % 6] })) },
