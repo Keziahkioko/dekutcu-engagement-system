@@ -13,14 +13,40 @@
     <h3>Bible Study attendance</h3>
     <p class="sub">Share of members present, week by week, from the group leaders' marking.</p>
     {% endif %}
-    {% if bible_study_weekly %}<div class="chart"><canvas id="bsChart"></canvas></div>
+    {% if bible_study_weekly %}
+    <div class="chart pending">
+      <canvas id="bsChart"></canvas>
+      <div class="chart-fallback table-wrap"><table>
+        <tr><th>Week starting</th><th class="num">{{ 'Present replies' if attendance.self_report_mode else 'Attendance' }}</th></tr>
+        {% for w in bible_study_weekly %}
+        <tr><td>{{ w.week }}</td>
+          {% if attendance.self_report_mode %}<td class="num">{{ w.present_replies }}</td>
+          {% else %}<td class="num">{{ w.rate ~ '%' if w.rate is not none else '—' }}</td>{% endif %}
+        </tr>
+        {% endfor %}
+      </table></div>
+    </div>
     {% elif attendance.self_report_mode %}{{ empty("No Bible Study self-report check-ins in this period yet.") }}
     {% else %}{{ empty("No attendance marked in this period yet.") }}{% endif %}
   </div>
   <div class="card">
     <h3>Fellowship</h3>
     <p class="sub">Members who said "I was there" to the evening check-in, week by week.</p>
-    {% if fellowship_weekly.weeks %}<div class="chart"><canvas id="fwChart"></canvas></div>
+    {% if fellowship_weekly.weeks %}
+    <div class="chart pending">
+      <canvas id="fwChart"></canvas>
+      <div class="chart-fallback table-wrap"><table>
+        <tr><th>Week starting</th>{% for activity in fellowship_weekly.series %}<th class="num">{{ activity }}</th>{% endfor %}</tr>
+        {% for week in fellowship_weekly.weeks %}
+        {% set week_index = loop.index0 %}
+        <tr><td>{{ week }}</td>
+          {% for values in fellowship_weekly.series.values() %}
+          <td class="num">{{ values[week_index] if values[week_index] is not none else '—' }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </table></div>
+    </div>
     {% else %}{{ empty("No fellowship check-ins in this period yet.") }}{% endif %}
   </div>
 </div>
@@ -74,25 +100,18 @@
 
 {% block scripts %}
 <script>
-  function showChartFallback(canvas, error) {
-    if (error) console.error(`Could not render attendance chart ${canvas.id}.`, error);
-    const chart = canvas.parentNode;
-    const message = document.createElement('div');
-    message.className = 'empty';
-    message.textContent = 'This chart could not be displayed. Refresh the page to try again.';
-    chart.parentNode.replaceChild(message, chart);
-  }
-
   function renderChart(canvasId, config) {
     const canvas = document.getElementById(canvasId);
-    if (typeof Chart === 'undefined') {
-      showChartFallback(canvas);
-      return;
-    }
+    const container = canvas.parentNode;
+    const fallback = container.querySelector('.chart-fallback');
+    if (typeof Chart === 'undefined') return;
+    container.classList.remove('pending');
     try {
       new Chart(canvas, config);
+      container.removeChild(fallback);
     } catch (error) {
-      showChartFallback(canvas, error);
+      console.error(`Could not render attendance chart ${canvasId}.`, error);
+      container.classList.add('pending');
     }
   }
 

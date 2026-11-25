@@ -3,8 +3,10 @@
 import os
 import unittest
 from datetime import date
+from pathlib import Path
 from unittest.mock import patch
 
+from jinja2 import Environment, FileSystemLoader
 from app.services import dashboard, reporting
 
 
@@ -151,6 +153,54 @@ class DashboardSelfReportTests(unittest.TestCase):
         self.assertIn("Bible Study: 1 self-reported present replies across 5 self-report check-in sessions", digest)
         self.assertNotIn("no attendance was marked", digest)
         self.assertNotIn("Groups with no marking", digest)
+
+
+class AttendanceTemplateFallbackTests(unittest.TestCase):
+    def test_weekly_values_are_rendered_as_html_tables_without_chart_javascript(self):
+        template_root = Path(__file__).resolve().parents[1] / "app" / "templates"
+        environment = Environment(loader=FileSystemLoader(str(template_root)))
+        environment.globals["url_for"] = lambda *args, **kwargs: "/"
+        template = environment.get_template("dashboard/attendance.html")
+        html = template.render(
+            attendance={
+                "self_report_mode": True,
+                "bible_study": [],
+                "groups_with_no_marking": [],
+                "bible_study_self_report": {
+                    "check_in_sessions": 1,
+                    "present_replies": 3,
+                    "absences_recorded": 0,
+                },
+            },
+            bible_study_weekly=[{
+                "week": "2026-11-23",
+                "sessions": 1,
+                "present_replies": 3,
+            }],
+            fellowship_weekly={
+                "weeks": ["2026-11-23"],
+                "series": {"Friday Fellowship": [2]},
+            },
+            lapsing=[],
+            days=7,
+            periods={7: "Last 7 days"},
+            viewer={
+                "name": "Leader",
+                "is_leader": True,
+                "leads_group_label": None,
+                "exec_office": None,
+            },
+            nav_pages=[("Home", "dashboard.overview", "home")],
+            active="attendance",
+            demo_mode=False,
+        )
+
+        self.assertIn(".chart.pending canvas { display: none; }", html)
+        self.assertIn('class="chart pending"', html)
+        self.assertIn("Present replies", html)
+        self.assertIn("<td class=\"num\">3</td>", html)
+        self.assertIn("Friday Fellowship", html)
+        self.assertIn("<td class=\"num\">2</td>", html)
 
 
 if __name__ == "__main__":

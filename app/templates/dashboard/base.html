@@ -125,6 +125,8 @@
     .how code { background: var(--surface-2); padding: 1px 6px; border-radius: 6px; font-size: 12.5px; color: var(--ink); }
     .empty { color: var(--muted); padding: 18px 0 6px; display: flex; gap: 10px; align-items: center; }
     .chart { position: relative; height: 260px; }
+    .chart.pending { height: auto; }
+    .chart.pending canvas { display: none; }
     .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
     .demo-banner { background: var(--attention); color: #fff; text-align: center; font-weight: 600; font-size: 14px; padding: 8px 16px; }
     .privacy { margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; display: flex; gap: 8px; }
