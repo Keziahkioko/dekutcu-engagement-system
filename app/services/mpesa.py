@@ -138,12 +138,16 @@ def _access_token():
             r = requests.get(f"{_BASE_URLS[_env()]}/oauth/v1/generate?grant_type=client_credentials",
                              headers={"Authorization": "Basic " + base64.b64encode(f"{key}:{secret}".encode()).decode()},
                              timeout=_TIMEOUT)
+        except requests.RequestException as e:
+            raise MpesaError(f"couldn't get an access token: {e}",
+                             f"OAuth transport failure ({type(e).__name__})") from e
+        try:
             body = r.json()
-        except (requests.RequestException, ValueError) as e:
-            category = "OAuth response was not valid JSON" if isinstance(e, ValueError) else (
-                f"OAuth transport failure ({type(e).__name__})"
-            )
-            raise MpesaError(f"couldn't get an access token: {e}", category) from e
+        except ValueError as e:
+            content_type = _safe_diagnostic_text(r.headers.get("Content-Type", "unknown"))[:80] or "unknown"
+            diagnostic = (f"OAuth response was not valid JSON (HTTP {r.status_code}, "
+                          f"content-type {content_type}, bytes {len(r.content)})")
+            raise MpesaError(f"couldn't parse the access-token response: {e}", diagnostic) from e
         if r.status_code != 200 or not body.get("access_token"):
             reason = body.get("error_description") or body.get("error")
             diagnostic = f"OAuth refused (HTTP {r.status_code})"

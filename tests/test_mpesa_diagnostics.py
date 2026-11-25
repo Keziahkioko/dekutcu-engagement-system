@@ -1,10 +1,36 @@
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app.services import mpesa, study_guides
 
 
 class MpesaPromptDiagnostics(unittest.TestCase):
+    def test_non_json_oauth_reply_logs_only_safe_response_metadata(self):
+        class NonJsonResponse:
+            status_code = 502
+            headers = {"Content-Type": "text/html; charset=utf-8"}
+            content = b"<html>not a JSON response; phone 254700000001</html>"
+
+            def json(self):
+                raise ValueError("invalid JSON")
+
+        fresh_token = {
+            "value": None,
+            "expires": datetime.min.replace(tzinfo=timezone.utc),
+        }
+        with patch.object(mpesa.requests, "get", return_value=NonJsonResponse()), \
+                patch.object(mpesa, "_token", fresh_token):
+            with self.assertRaises(mpesa.MpesaError) as raised:
+                mpesa._access_token()
+
+        diagnostic = raised.exception.diagnostic
+        self.assertIn("HTTP 502", diagnostic)
+        self.assertIn("content-type text/html; charset=utf-8", diagnostic)
+        self.assertIn("bytes 52", diagnostic)
+        self.assertNotIn("not a JSON response", diagnostic)
+        self.assertNotIn("254700000001", diagnostic)
+
     def test_stk_refusal_includes_safe_status_and_response_detail(self):
         response = {
             "ResponseCode": "1",
