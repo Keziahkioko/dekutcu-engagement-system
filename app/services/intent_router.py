@@ -24,7 +24,8 @@ already exists. allocate_groups and reshuffle_groups (Stage 5) are
 also genuinely handled -- they trigger the allocation engine in
 app/services/allocation.py in a background thread (the ILP solve is
 too slow to run inside the webhook request -- see Stage 5 planning
-notes) and message the leader again once it's done.
+notes), notify members who were placed, and message the leader with
+the completion summary.
 
 Stage 6 adds group-LEADER management: nominate_group_leader,
 view_group_leaders, resolve_pending_leader, and remove_group_leader
@@ -57,6 +58,7 @@ from app.models.member import (
     get_data_consenting_members,
     set_group_labels,
     count_group_placement_status,
+    get_all_groups_with_leaders,
     confirm_leader_nomination,
     decline_leader_nomination,
     get_leader_status,
@@ -151,8 +153,8 @@ LEADER_ONLY_INTENTS = {
     "start_study_guide", "appoint_guides_coordinator", "give_guide_batch", "hand_over_guides", "guide_stock",
 }
 
-# Guards against two allocation runs (each ~10-15 seconds) overlapping
-# if a leader triggers this more than once before the first finishes.
+# Prevent overlapping allocation and member-notification batches.
+# The lock stays held through the member-notification batch.
 _allocation_lock = threading.Lock()
 
 
@@ -405,15 +407,16 @@ def _allocate_groups_confirmation_text(placed, unplaced):
         return (
             f"This is your first time running allocation -- it'll place all "
             f"{unplaced} registered member(s) into their first Bible study "
-            "groups. It takes about 10-15 seconds -- I'll message you again "
-            "once it's done.\n\n"
+            "groups. I'll message you when the groups and member notices are "
+            "complete; sending the notices can take a little while.\n\n"
             "Reply YES to confirm, or NO to cancel."
         )
 
     return (
         f"This will place {unplaced} new member(s) into Bible study groups, "
-        f"without moving the {placed} member(s) already placed. It takes "
-        "about 10-15 seconds -- I'll message you again once it's done.\n\n"
+        f"without moving the {placed} member(s) already placed. Allocation "
+        "and member notices can take a little while; I'll message you when "
+        "they're complete.\n\n"
         "Reply YES to confirm, or NO to cancel."
     )
 
@@ -739,7 +742,7 @@ def _start_allocation_job(whatsapp_id, action):
     thread = threading.Thread(target=_run_allocation_job, args=(whatsapp_id, mode), daemon=True)
     thread.start()
 
-    return "Working on it -- I'll message you again once it's done (about 10-15 seconds)."
+    return "Working on it -- I'll message you when group allocation and member notices are complete."
 
 
 def _run_allocation_job(whatsapp_id, mode):
@@ -763,13 +766,68 @@ def _run_allocation_job(whatsapp_id, mode):
             for area in {_area_from_label(label) for label in updates.values()}:
                 leader_assignment.match_and_notify(area)
 
-        summary = _build_allocation_summary(updates, result["flagged_areas"], mode)
+        notice_counts = _notify_members_of_group_assignments(members, updates)
+        summary = _build_allocation_summary(
+            updates, result["flagged_areas"], mode, notice_counts,
+        )
     except Exception as e:
         summary = f"Something went wrong while generating groups: {e}"
     finally:
         _allocation_lock.release()
 
     send_whatsapp_message(whatsapp_id, summary)
+
+
+def _notify_members_of_group_assignments(members, updates):
+    """Notify only members whose group label was assigned in this run."""
+    if not updates:
+        return {"accepted": 0, "not_sent": 0}
+
+    members_by_reg_number = {member["reg_number"]: member for member in members}
+    try:
+        assigned_groups = set(updates.values())
+        leaders_by_group = {
+            group_label: leader_name
+            for group_label, _area, _count, leader_name in get_all_groups_with_leaders()
+            if group_label in assigned_groups
+        }
+    except Exception as e:
+        print(f"Could not look up group leaders for allocation notices: {type(e).__name__}")
+        return {"accepted": 0, "not_sent": len(updates)}
+
+    accepted = 0
+    not_sent = 0
+    for reg_number, group_label in updates.items():
+        member = members_by_reg_number.get(reg_number)
+        if not member or not member.get("whatsapp_id"):
+            not_sent += 1
+            continue
+
+        leader_name = leaders_by_group.get(group_label)
+        leader_text = (
+            f"Your group leader is {leader_name}."
+            if leader_name else
+            "A group leader has not been assigned yet."
+        )
+        message = f"Your Bible Study group is {group_label}. {leader_text}"
+
+        try:
+            response = send_whatsapp_message(
+                member["whatsapp_id"],
+                message,
+                topic="your Bible Study group assignment",
+            )
+        except Exception as e:
+            print(f"Group assignment notice failed: {type(e).__name__}")
+            not_sent += 1
+            continue
+
+        if response is not None and response.status_code == 200:
+            accepted += 1
+        else:
+            not_sent += 1
+
+    return {"accepted": accepted, "not_sent": not_sent}
 
 
 def _area_from_label(group_label):
@@ -788,7 +846,7 @@ def _labels_from_groups(groups_by_area):
     return updates
 
 
-def _build_allocation_summary(updates, flagged_areas, mode):
+def _build_allocation_summary(updates, flagged_areas, mode, notice_counts=None):
     verb = "Reshuffle" if mode == "reshuffle" else "Allocation"
 
     if not updates and not flagged_areas:
@@ -796,6 +854,13 @@ def _build_allocation_summary(updates, flagged_areas, mode):
 
     group_count = len(set(updates.values()))
     lines = [f"{verb} complete. {len(updates)} member(s) placed into {group_count} group(s)."]
+
+    if notice_counts is not None and updates:
+        lines.append("")
+        lines.append(
+            "Group notices accepted by WhatsApp (sent or queued): "
+            f"{notice_counts['accepted']}; not sent: {notice_counts['not_sent']}."
+        )
 
     if flagged_areas:
         lines.append("")
