@@ -14,6 +14,7 @@ title (the trap found in the attendance question on 2026-09-30). "cancel"
 stops it at any step.
 """
 
+import logging
 import re
 from datetime import datetime, timezone, timedelta
 
@@ -28,6 +29,8 @@ from app.models.study_guide import (
 )
 from app.services import mpesa, guide_payments, guide_coordinator
 from app.services.whatsapp_client import send_whatsapp_message
+
+logger = logging.getLogger(__name__)
 
 CONVERSATION_LIFETIME = timedelta(minutes=30)
 MAX_TITLE_LENGTH = 80
@@ -275,7 +278,8 @@ def handle_purchase_reply(whatsapp_id, message_text):
         return f"You've already bought '{guide['title']}' -- no need to pay again."
     try:
         guide_payments.start_payment(member, guide, phone)
-    except mpesa.MpesaError:
+    except mpesa.MpesaError as error:
+        logger.warning("M-Pesa STK prompt failed: %s", error.diagnostic)
         return "I couldn't send the M-Pesa prompt just now -- please try again in a few minutes."
     return (f"I've sent an M-Pesa prompt for KES {guide['price_kes']} to {_display_phone(phone)} -- enter your "
             "M-Pesa PIN on your phone to pay. I'll confirm here once it's through.")

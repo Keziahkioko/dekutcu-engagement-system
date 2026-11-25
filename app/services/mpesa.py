@@ -58,6 +58,20 @@ _STILL_PROCESSING = "500.001.1001"   # status-query error code: "the transaction
 class MpesaError(Exception):
     """Safaricom refused or couldn't be reached -- no prompt was sent / no answer obtained."""
 
+    def __init__(self, message, diagnostic="unspecified Daraja failure"):
+        super().__init__(message)
+        self.diagnostic = diagnostic
+
+
+def _safe_diagnostic_text(value):
+    text = " ".join(str(value or "").split())[:200]
+    text = re.sub(r"(?<!\d)(?:\+?254|0)?(?:[\s()-]*\d){9,12}(?!\d)", "[number redacted]", text)
+    return re.sub(
+        r"(?i)\b(?:access[_ -]?token|consumer[_ -]?(?:key|secret)|passkey|password)\b\s*[:=]\s*[^\s,;]+",
+        "[credential redacted]",
+        text,
+    )
+
 
 def _env():
     env = os.getenv("MPESA_ENV", "sandbox").strip().lower()
@@ -126,9 +140,16 @@ def _access_token():
                              timeout=_TIMEOUT)
             body = r.json()
         except (requests.RequestException, ValueError) as e:
-            raise MpesaError(f"couldn't get an access token: {e}")
+            category = "OAuth response was not valid JSON" if isinstance(e, ValueError) else (
+                f"OAuth transport failure ({type(e).__name__})"
+            )
+            raise MpesaError(f"couldn't get an access token: {e}", category) from e
         if r.status_code != 200 or not body.get("access_token"):
-            raise MpesaError(f"access token refused ({r.status_code})")
+            reason = body.get("error_description") or body.get("error")
+            diagnostic = f"OAuth refused (HTTP {r.status_code})"
+            if reason:
+                diagnostic += f": {_safe_diagnostic_text(reason)}"
+            raise MpesaError(f"access token refused ({r.status_code})", diagnostic)
         _token["value"] = body["access_token"]
         # Renew a minute early so a token never expires mid-request.
         _token["expires"] = now + timedelta(seconds=int(body.get("expires_in", 3599)) - 60)
@@ -141,7 +162,10 @@ def _post(path, payload):
                           headers={"Authorization": f"Bearer {_access_token()}"}, timeout=_TIMEOUT)
         return r.status_code, r.json()
     except (requests.RequestException, ValueError) as e:
-        raise MpesaError(f"Safaricom couldn't be reached: {e}")
+        category = "Daraja response was not valid JSON" if isinstance(e, ValueError) else (
+            f"Daraja transport failure ({type(e).__name__})"
+        )
+        raise MpesaError(f"Safaricom couldn't be reached: {e}", category) from e
 
 
 def stk_push(phone, amount_kes, account_reference, description):
@@ -164,7 +188,11 @@ def stk_push(phone, amount_kes, account_reference, description):
         "TransactionDesc": description[:13],
     })
     if status != 200 or str(body.get("ResponseCode")) != "0" or not body.get("CheckoutRequestID"):
-        raise MpesaError(body.get("errorMessage") or body.get("ResponseDescription") or f"push refused ({status})")
+        reason = body.get("errorMessage") or body.get("ResponseDescription") or f"push refused ({status})"
+        response_code = _safe_diagnostic_text(body.get("ResponseCode") or body.get("errorCode") or "unknown")
+        diagnostic = (f"STK push refused (HTTP {status}, code {response_code}): "
+                      f"{_safe_diagnostic_text(reason)}")
+        raise MpesaError(reason, diagnostic)
     return {"checkout_request_id": body["CheckoutRequestID"], "merchant_request_id": body.get("MerchantRequestID")}
 
 
@@ -183,7 +211,11 @@ def query_status(checkout_request_id):
     if body.get("errorCode") == _STILL_PROCESSING:
         return None
     if status != 200 or "ResultCode" not in body:
-        raise MpesaError(body.get("errorMessage") or f"status query failed ({status})")
+        reason = body.get("errorMessage") or f"status query failed ({status})"
+        code = _safe_diagnostic_text(body.get("errorCode") or "unknown")
+        diagnostic = (f"STK status query failed (HTTP {status}, code {code}): "
+                      f"{_safe_diagnostic_text(reason)}")
+        raise MpesaError(reason, diagnostic)
     return {"result_code": int(body["ResultCode"]), "result_desc": body.get("ResultDesc", "")}
 
 
